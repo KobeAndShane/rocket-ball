@@ -1,0 +1,32 @@
+[gd_resource type="Resource" script_class="CosmeticItem" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://cosmetics/CosmeticItem.gd" id="1_teoe8"]
+
+[resource]
+script = ExtResource("1_teoe8")
+id = "body_aurora"
+display_name = "Aurora"
+description = "Season pass reward. The hull glows like a magnetosphere."
+slot = "body"
+rarity = "legendary"
+price = 0
+unlock_level = 1
+default_owned = false
+season_only = true
+primary_color = Color(0.05, 0.7, 0.55, 1)
+secondary_color = Color(0.0325, 0.455, 0.3575, 1)
+accent_color = Color(0.55, 1, 0.95, 1)
+metallic = 0.45
+roughness = 0.35
+emission_strength = 1.1
+body_scale = Vector3(1.03, 1, 1.03)
+body_offset = Vector3(0, 0, 0)
+cabin_scale = Vector3(1, 1, 1)
+cabin_offset = Vector3(0, 0, 0)
+wheel_radius = 0.34
+wheel_width = 0.16
+wheel_spokes = 0
+decal_pattern = 0
+antenna_style = 0
+trail_style = 0
+explosion_style = 0

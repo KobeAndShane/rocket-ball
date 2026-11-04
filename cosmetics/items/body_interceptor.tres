@@ -1,0 +1,32 @@
+[gd_resource type="Resource" script_class="CosmeticItem" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://cosmetics/CosmeticItem.gd" id="1_x1ohy"]
+
+[resource]
+script = ExtResource("1_x1ohy")
+id = "body_interceptor"
+display_name = "Interceptor"
+description = "Low, wide and built for wall runs."
+slot = "body"
+rarity = "rare"
+price = 800
+unlock_level = 5
+default_owned = false
+season_only = false
+primary_color = Color(0.05, 0.45, 0.42, 1)
+secondary_color = Color(0.0325, 0.2925, 0.273, 1)
+accent_color = Color(0.2, 1, 0.85, 1)
+metallic = 0.7
+roughness = 0.35
+emission_strength = 0.35
+body_scale = Vector3(1.04, 0.9, 1.04)
+body_offset = Vector3(0, 0, 0)
+cabin_scale = Vector3(0.92, 0.78, 0.92)
+cabin_offset = Vector3(0, 0.33, 0.15)
+wheel_radius = 0.34
+wheel_width = 0.16
+wheel_spokes = 0
+decal_pattern = 0
+antenna_style = 0
+trail_style = 0
+explosion_style = 0

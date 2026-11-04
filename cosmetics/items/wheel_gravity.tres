@@ -1,0 +1,32 @@
+[gd_resource type="Resource" script_class="CosmeticItem" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://cosmetics/CosmeticItem.gd" id="1_nnaq6"]
+
+[resource]
+script = ExtResource("1_nnaq6")
+id = "wheel_gravity"
+display_name = "Gravity Rings"
+description = "Oversized rings that shrug off the shift."
+slot = "wheel"
+rarity = "epic"
+price = 1200
+unlock_level = 8
+default_owned = false
+season_only = false
+primary_color = Color(0.12, 0.03, 0.2, 1)
+secondary_color = Color(0.078, 0.0195, 0.13, 1)
+accent_color = Color(0.75, 0.3, 1, 1)
+metallic = 0.45
+roughness = 0.35
+emission_strength = 1.2
+body_scale = Vector3(1, 1, 1)
+body_offset = Vector3(0, 0, 0)
+cabin_scale = Vector3(1, 1, 1)
+cabin_offset = Vector3(0, 0, 0)
+wheel_radius = 0.37
+wheel_width = 0.2
+wheel_spokes = 12
+decal_pattern = 0
+antenna_style = 0
+trail_style = 0
+explosion_style = 0

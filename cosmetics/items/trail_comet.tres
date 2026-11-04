@@ -1,0 +1,32 @@
+[gd_resource type="Resource" script_class="CosmeticItem" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://cosmetics/CosmeticItem.gd" id="1_jds0b"]
+
+[resource]
+script = ExtResource("1_jds0b")
+id = "trail_comet"
+display_name = "Comet"
+description = "Supersonic runs leave a comet tail."
+slot = "trail"
+rarity = "epic"
+price = 1400
+unlock_level = 7
+default_owned = false
+season_only = false
+primary_color = Color(1, 0.6, 0.2, 1)
+secondary_color = Color(0.65, 0.39, 0.13, 1)
+accent_color = Color(1, 0.9, 0.5, 1)
+metallic = 0.45
+roughness = 0.35
+emission_strength = 1.6
+body_scale = Vector3(1, 1, 1)
+body_offset = Vector3(0, 0, 0)
+cabin_scale = Vector3(1, 1, 1)
+cabin_offset = Vector3(0, 0, 0)
+wheel_radius = 0.34
+wheel_width = 0.16
+wheel_spokes = 0
+decal_pattern = 0
+antenna_style = 0
+trail_style = 2
+explosion_style = 0

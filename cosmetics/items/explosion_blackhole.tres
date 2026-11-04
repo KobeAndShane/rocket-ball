@@ -1,0 +1,32 @@
+[gd_resource type="Resource" script_class="CosmeticItem" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://cosmetics/CosmeticItem.gd" id="1_3nisa"]
+
+[resource]
+script = ExtResource("1_3nisa")
+id = "explosion_blackhole"
+display_name = "Singularity"
+description = "Collapse the goal into a violet singularity."
+slot = "explosion"
+rarity = "legendary"
+price = 2500
+unlock_level = 15
+default_owned = false
+season_only = false
+primary_color = Color(0.2, 0.05, 0.3, 1)
+secondary_color = Color(0.13, 0.0325, 0.195, 1)
+accent_color = Color(0.8, 0.2, 1, 1)
+metallic = 0.45
+roughness = 0.35
+emission_strength = 2.2
+body_scale = Vector3(1, 1, 1)
+body_offset = Vector3(0, 0, 0)
+cabin_scale = Vector3(1, 1, 1)
+cabin_offset = Vector3(0, 0, 0)
+wheel_radius = 0.34
+wheel_width = 0.16
+wheel_spokes = 0
+decal_pattern = 0
+antenna_style = 0
+trail_style = 0
+explosion_style = 2

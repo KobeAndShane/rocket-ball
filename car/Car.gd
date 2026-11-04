@@ -56,6 +56,35 @@ var _network_tick: int = 0
 var _state_packets: Array[Dictionary] = []
 var _stuck_timer: float = 0.0
 
+# Cosmetic loadout. Presentation only: the collider and tuning never change.
+var cosmetic_body_id: String = "body_stock"
+var cosmetic_wheel_id: String = "wheel_stock"
+var cosmetic_boost_id: String = "boost_standard"
+var cosmetic_trail_id: String = "trail_none"
+var cosmetic_decal_id: String = "decal_none"
+var cosmetic_explosion_id: String = "explosion_standard"
+var cosmetic_antenna_id: String = "antenna_none"
+var _loadout: Dictionary = {}
+var _pending_loadout: Dictionary = {}
+var _visuals_built: bool = false
+var _body_item: CosmeticItem
+var _wheel_item: CosmeticItem
+var _boost_item: CosmeticItem
+var _trail_item: CosmeticItem
+var _decal_item: CosmeticItem
+var _antenna_item: CosmeticItem
+var _base_body_position := Vector3.ZERO
+var _base_body_scale := Vector3.ONE
+var _base_cabin_position := Vector3.ZERO
+var _base_cabin_scale := Vector3.ONE
+var _decal_mesh: MeshInstance3D
+var _decal_material: ShaderMaterial
+var _antenna_root: Node3D
+var _antenna_flag: MeshInstance3D
+var _antenna_flag_material: StandardMaterial3D
+var _boost_trail: CPUParticles3D
+var _speed_trail: CPUParticles3D
+
 
 func _ready() -> void:
 	if tuning == null:
@@ -101,8 +130,12 @@ func _build_visuals() -> void:
 	var cabin := get_node_or_null("CabinMesh") as MeshInstance3D
 	if body != null:
 		_body_meshes.append(body)
+		_base_body_position = body.position
+		_base_body_scale = body.scale
 	if cabin != null:
 		_body_meshes.append(cabin)
+		_base_cabin_position = cabin.position
+		_base_cabin_scale = cabin.scale
 	_team_material = StandardMaterial3D.new()
 	_team_material.albedo_color = team_color()
 	_team_material.metallic = 0.45
@@ -112,6 +145,29 @@ func _build_visuals() -> void:
 	for m in _body_meshes:
 		m.material_override = _team_material
 	# Wheels are visual-only; physics uses rays.
+	_build_wheels()
+	_build_decal()
+	_build_antenna()
+	_build_trails()
+	_name_tag = Label3D.new()
+	_name_tag.text = display_name
+	_name_tag.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	_name_tag.font_size = 42
+	_name_tag.pixel_size = 0.0045
+	_name_tag.position = Vector3(0.0, 1.35, 0.0)
+	_name_tag.modulate = team_color()
+	_name_tag.outline_size = 8
+	_name_tag.no_depth_test = true
+	_name_tag.render_priority = 10
+	add_child(_name_tag)
+	_visuals_built = true
+	if not _pending_loadout.is_empty():
+		apply_cosmetics(_pending_loadout)
+	else:
+		apply_cosmetics(CosmeticLibrary.default_loadout())
+
+
+func _build_wheels() -> void:
 	var wheel_mesh := CylinderMesh.new()
 	wheel_mesh.top_radius = tuning.wheel_radius
 	wheel_mesh.bottom_radius = tuning.wheel_radius
@@ -128,17 +184,90 @@ func _build_visuals() -> void:
 		wheel.rotation_degrees = Vector3(0, 0, 90)
 		add_child(wheel)
 		_wheel_nodes.append(wheel)
-	_name_tag = Label3D.new()
-	_name_tag.text = display_name
-	_name_tag.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-	_name_tag.font_size = 42
-	_name_tag.pixel_size = 0.0045
-	_name_tag.position = Vector3(0.0, 1.35, 0.0)
-	_name_tag.modulate = team_color()
-	_name_tag.outline_size = 8
-	_name_tag.no_depth_test = true
-	_name_tag.render_priority = 10
-	add_child(_name_tag)
+
+
+func _build_decal() -> void:
+	_decal_mesh = MeshInstance3D.new()
+	_decal_mesh.name = "DecalMesh"
+	var decal := BoxMesh.new()
+	decal.size = Vector3(1.88, 0.015, 3.32)
+	_decal_mesh.mesh = decal
+	_decal_material = ShaderMaterial.new()
+	_decal_material.shader = load("res://vfx/car_decal.gdshader")
+	_decal_mesh.material_override = _decal_material
+	_decal_mesh.position = Vector3(0.0, 0.245, 0.0)
+	_decal_mesh.visible = false
+	add_child(_decal_mesh)
+
+
+func _build_antenna() -> void:
+	_antenna_root = Node3D.new()
+	_antenna_root.name = "Antenna"
+	_antenna_root.position = Vector3(-0.58, 0.55, 0.78)
+	add_child(_antenna_root)
+	var mast := MeshInstance3D.new()
+	var mast_mesh := CylinderMesh.new()
+	mast_mesh.top_radius = 0.009
+	mast_mesh.bottom_radius = 0.012
+	mast_mesh.height = 0.55
+	mast_mesh.radial_segments = 6
+	mast.mesh = mast_mesh
+	mast.position = Vector3(0.0, 0.275, 0.0)
+	var mast_mat := StandardMaterial3D.new()
+	mast_mat.albedo_color = Color(0.16, 0.18, 0.22)
+	mast.material_override = mast_mat
+	_antenna_root.add_child(mast)
+	_antenna_flag = MeshInstance3D.new()
+	var flag_mesh := QuadMesh.new()
+	flag_mesh.size = Vector2(0.24, 0.15)
+	_antenna_flag.mesh = flag_mesh
+	_antenna_flag.position = Vector3(0.12, 0.52, 0.0)
+	_antenna_flag_material = StandardMaterial3D.new()
+	_antenna_flag_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_antenna_flag_material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_antenna_flag_material.emission_enabled = true
+	_antenna_flag.material_override = _antenna_flag_material
+	_antenna_root.add_child(_antenna_flag)
+	_antenna_root.visible = false
+
+
+func _build_trails() -> void:
+	_boost_trail = _make_trail(Color(0.3, 0.7, 1.0), 32, 0.32, 2.0, 4.5, 0.16)
+	_boost_trail.name = "BoostTrail"
+	_boost_trail.position = Vector3(0.0, 0.05, 1.72)
+	add_child(_boost_trail)
+	_speed_trail = _make_trail(Color(1.0, 0.7, 0.3), 20, 0.45, 1.2, 2.6, 0.11)
+	_speed_trail.name = "SpeedTrail"
+	_speed_trail.position = Vector3(0.0, 0.12, 1.55)
+	add_child(_speed_trail)
+
+
+func _make_trail(color: Color, amount: int, lifetime: float, vmin: float, vmax: float, size: float) -> CPUParticles3D:
+	var particles := CPUParticles3D.new()
+	particles.amount = amount
+	particles.lifetime = lifetime
+	particles.local_coords = false
+	particles.emitting = false
+	particles.direction = Vector3(0.0, 0.0, 1.0)
+	particles.spread = 12.0
+	particles.initial_velocity_min = vmin
+	particles.initial_velocity_max = vmax
+	particles.gravity = Vector3.ZERO
+	particles.scale_amount_min = 0.35
+	particles.scale_amount_max = 1.0
+	particles.color = color
+	var quad := QuadMesh.new()
+	quad.size = Vector2(size, size)
+	particles.mesh = quad
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.vertex_color_use_as_albedo = true
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	particles.material_override = mat
+	return particles
+
 
 
 func team_color() -> Color:
@@ -151,11 +280,175 @@ func team_color() -> Color:
 
 func set_team(new_team: int) -> void:
 	team = new_team
-	if _team_material != null:
-		_team_material.albedo_color = team_color()
-		_team_material.emission = team_color() * 0.22
+	_refresh_team_material()
 	if _name_tag != null:
 		_name_tag.modulate = team_color()
+
+
+## Apply a cosmetic loadout to this car. The collider and tuning are untouched,
+## so a body skin can never change driving or hitbox behaviour.
+func apply_cosmetics(loadout: Dictionary) -> void:
+	var clean := CosmeticLibrary.sanitize_loadout(loadout)
+	if not _visuals_built:
+		_pending_loadout = clean
+		return
+	_loadout = clean
+	_body_item = CosmeticLibrary.get_item(str(clean.get("body", "body_stock")))
+	_wheel_item = CosmeticLibrary.get_item(str(clean.get("wheel", "wheel_stock")))
+	_boost_item = CosmeticLibrary.get_item(str(clean.get("boost", "boost_standard")))
+	_trail_item = CosmeticLibrary.get_item(str(clean.get("trail", "trail_none")))
+	_decal_item = CosmeticLibrary.get_item(str(clean.get("decal", "decal_none")))
+	_antenna_item = CosmeticLibrary.get_item(str(clean.get("antenna", "antenna_none")))
+	var explosion_item := CosmeticLibrary.get_item(str(clean.get("explosion", "explosion_standard")))
+	cosmetic_body_id = str(clean.get("body", "body_stock"))
+	cosmetic_wheel_id = str(clean.get("wheel", "wheel_stock"))
+	cosmetic_boost_id = str(clean.get("boost", "boost_standard"))
+	cosmetic_trail_id = str(clean.get("trail", "trail_none"))
+	cosmetic_decal_id = str(clean.get("decal", "decal_none"))
+	cosmetic_antenna_id = str(clean.get("antenna", "antenna_none"))
+	cosmetic_explosion_id = str(clean.get("explosion", "explosion_standard"))
+	_apply_body_cosmetic(_body_item)
+	_apply_wheel_cosmetic(_wheel_item)
+	_apply_decal_cosmetic(_decal_item)
+	_apply_antenna_cosmetic(_antenna_item)
+	_apply_trail_cosmetics(_boost_item, _trail_item)
+	# Stored for goal-explosion VFX consumers.
+	set_meta("explosion_style", explosion_item.explosion_style if explosion_item != null else 1)
+	set_meta("explosion_color", explosion_item.primary_color if explosion_item != null else Color(1.0, 0.55, 0.2))
+
+
+func get_cosmetic_id(slot: String) -> String:
+	match slot:
+		"body":
+			return cosmetic_body_id
+		"wheel":
+			return cosmetic_wheel_id
+		"boost":
+			return cosmetic_boost_id
+		"trail":
+			return cosmetic_trail_id
+		"decal":
+			return cosmetic_decal_id
+		"explosion":
+			return cosmetic_explosion_id
+		"antenna":
+			return cosmetic_antenna_id
+	return ""
+
+
+func get_loadout() -> Dictionary:
+	return _loadout.duplicate(true)
+
+
+func _refresh_team_material() -> void:
+	if _team_material == null:
+		return
+	var base: Color = team_color()
+	var accent: Color = team_color()
+	var metallic: float = 0.45
+	var roughness: float = 0.35
+	var emission: float = 0.22
+	if _body_item != null:
+		base = base.lerp(_body_item.primary_color, 0.4)
+		accent = _body_item.accent_color
+		metallic = _body_item.metallic
+		roughness = _body_item.roughness
+		emission = clampf(_body_item.emission_strength, 0.05, 1.5)
+	_team_material.albedo_color = base
+	_team_material.metallic = metallic
+	_team_material.roughness = roughness
+	_team_material.emission_enabled = true
+	_team_material.emission = accent * emission
+
+
+func _apply_body_cosmetic(item: CosmeticItem) -> void:
+	if item == null:
+		return
+	var body := get_node_or_null("BodyMesh") as MeshInstance3D
+	var cabin := get_node_or_null("CabinMesh") as MeshInstance3D
+	if body != null:
+		body.scale = _base_body_scale * item.body_scale
+		body.position = _base_body_position + item.body_offset
+	if cabin != null:
+		cabin.scale = _base_cabin_scale * item.cabin_scale
+		cabin.position = _base_cabin_position + item.cabin_offset
+	if _decal_mesh != null:
+		_decal_mesh.position = Vector3(0.0, _base_body_position.y + 0.27 * item.body_scale.y, 0.0)
+		_decal_mesh.scale = Vector3(item.body_scale.x, 1.0, item.body_scale.z)
+	_refresh_team_material()
+
+
+func _apply_wheel_cosmetic(item: CosmeticItem) -> void:
+	if item == null:
+		return
+	var mesh := CylinderMesh.new()
+	mesh.top_radius = item.wheel_radius
+	mesh.bottom_radius = item.wheel_radius
+	mesh.height = item.wheel_width
+	mesh.radial_segments = 14
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = item.primary_color
+	mat.metallic = item.metallic
+	mat.roughness = item.roughness
+	mat.emission_enabled = item.emission_strength > 0.01
+	mat.emission = item.accent_color * clampf(item.emission_strength, 0.0, 2.0)
+	for wheel: MeshInstance3D in _wheel_nodes:
+		wheel.mesh = mesh
+		wheel.material_override = mat
+
+
+func _apply_decal_cosmetic(item: CosmeticItem) -> void:
+	if _decal_mesh == null or _decal_material == null:
+		return
+	var pattern: int = item.decal_pattern if item != null else 0
+	_decal_mesh.visible = pattern > 0
+	if pattern > 0:
+		_decal_material.set_shader_parameter("line_color", item.accent_color)
+		_decal_material.set_shader_parameter("pattern", float(pattern))
+		_decal_material.set_shader_parameter("glow", maxf(item.emission_strength, 0.7))
+
+
+func _apply_antenna_cosmetic(item: CosmeticItem) -> void:
+	if _antenna_root == null:
+		return
+	var style: int = item.antenna_style if item != null else 0
+	_antenna_root.visible = style > 0
+	if style > 0 and _antenna_flag_material != null:
+		_antenna_flag_material.albedo_color = item.primary_color
+		_antenna_flag_material.emission = item.accent_color
+		_antenna_flag_material.emission_energy_multiplier = 0.8
+
+
+func _apply_trail_cosmetics(boost_item: CosmeticItem, trail_item: CosmeticItem) -> void:
+	if _boost_trail != null and boost_item != null:
+		_boost_trail.color = boost_item.primary_color
+		_boost_trail.scale_amount_min = 0.25 + float(boost_item.trail_style) * 0.08
+		_boost_trail.scale_amount_max = 0.85 + float(boost_item.trail_style) * 0.12
+	if _speed_trail != null:
+		var enabled: bool = trail_item != null and trail_item.trail_style > 0
+		_speed_trail.visible = enabled
+		if enabled:
+			_speed_trail.color = trail_item.accent_color
+			_speed_trail.scale_amount_min = 0.2 + float(trail_item.trail_style) * 0.07
+			_speed_trail.scale_amount_max = 0.7 + float(trail_item.trail_style) * 0.1
+
+
+func _update_cosmetic_effects() -> void:
+	var boosting: bool = input.boost and boost_component != null and boost_component.amount > 0.0
+	if _boost_trail != null:
+		_boost_trail.emitting = boosting and state != State.DEMOLISHED and not frozen
+	if _speed_trail != null:
+		var trail_ok: bool = _trail_item != null and _trail_item.trail_style > 0
+		_speed_trail.emitting = trail_ok and is_supersonic and state != State.DEMOLISHED and not frozen
+	if _antenna_root != null and _antenna_root.visible and GravityManager.up.length_squared() > 0.001:
+		# Keep the little flag pointing away from the current floor.
+		var want: Vector3 = GravityManager.up
+		var flag_dir: Vector3 = _antenna_root.global_transform.basis.y.normalized()
+		var axis: Vector3 = flag_dir.cross(want)
+		if axis.length_squared() > 0.0001:
+			var basis: Basis = _antenna_root.global_transform.basis.rotated(axis.normalized(), flag_dir.angle_to(want) * 0.08)
+			_antenna_root.global_transform = Transform3D(basis, _antenna_root.global_position)
+
 
 
 func set_display_name(new_name: String) -> void:
@@ -183,6 +476,7 @@ func is_local_player_visual() -> bool:
 
 func _physics_process(delta: float) -> void:
 	speed = linear_velocity.length()
+	_update_cosmetic_effects()
 	if state != State.DEMOLISHED:
 		var sup: bool = speed >= tuning.supersonic_speed
 		if sup != is_supersonic:

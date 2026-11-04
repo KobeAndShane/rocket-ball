@@ -3,7 +3,7 @@ extends Node
 ## Save format is versioned JSON; the backend mirror uses the same shape.
 
 const SAVE_PATH := "user://profile.json"
-const SAVE_VERSION := 3
+const SAVE_VERSION := 4
 const RANK_TIERS := ["Bronze", "Silver", "Gold", "Platinum", "Diamond", "Champion", "Grand Champion"]
 const TIER_SIZE := 300
 const PLACEMENT_MATCHES := 10
@@ -11,6 +11,9 @@ const SEASON_LENGTH_SECONDS := 90.0 * 24.0 * 60.0 * 60.0
 const LEAVER_COOLDOWNS: Array[float] = [300.0, 900.0, 3600.0]
 const ABANDON_PENALTY := 25.0
 const SMURF_RISK_THRESHOLD := 0.6
+const SEASON_PASS_LEVELS := 30
+const SEASON_PASS_XP_PER_LEVEL := 5000
+const PREMIUM_PASS_COST := 1200
 
 var profile: Dictionary = {}
 var daily_challenges: Array[Dictionary] = []
@@ -70,47 +73,46 @@ func _default_profile() -> void:
 		"season_history": [],
 		"premium_pass": false,
 		"credits": 500,
-		"inventory": ["body_stock", "wheel_stock", "boost_standard", "decal_none", "explosion_standard", "antenna_none"],
-		"loadout": {
-			"body": "body_stock",
-			"wheel": "wheel_stock",
-			"boost": "boost_standard",
-			"decal": "decal_none",
-			"explosion": "explosion_standard",
-			"antenna": "antenna_none",
-			"trail": "trail_none",
-		},
+		"inventory": ["body_stock", "wheel_stock", "boost_standard", "decal_none", "explosion_standard", "antenna_none", "trail_none"],
+		"loadout": _default_loadout(),
+		"loadout_presets": [],
+		"active_preset": 0,
 		"season_rewards_claimed": [],
+		"mvp_count": 0,
+		"win_streak": 0,
+		"best_win_streak": 0,
 		"challenge_progress": {},
 		"challenges_date": "",
+		"challenges_week": "",
+		"challenges_claimed": {"daily": [], "weekly": []},
 	}
+	var preset_default := {
+		"name": "Default",
+		"loadout": profile["loadout"].duplicate(true),
+	}
+	profile["loadout_presets"] = [preset_default]
+
+
+func _default_loadout() -> Dictionary:
+	return CosmeticLibrary.default_loadout()
 
 
 func _build_catalog() -> void:
-	catalog = [
-		_cosmetic("body_stock", "body", "Stock Body", "common", 0, true),
-		_cosmetic("body_interceptor", "body", "Interceptor", "rare", 800, false),
-		_cosmetic("body_orbiter", "body", "Orbiter", "epic", 1500, false),
-		_cosmetic("wheel_stock", "wheel", "Stock Wheels", "common", 0, true),
-		_cosmetic("wheel_neon", "wheel", "Neon Spokes", "rare", 500, false),
-		_cosmetic("wheel_gravity", "wheel", "Gravity Rings", "epic", 1200, false),
-		_cosmetic("boost_standard", "boost", "Standard Boost", "common", 0, true),
-		_cosmetic("boost_ion", "boost", "Ion Trail", "rare", 600, false),
-		_cosmetic("boost_supernova", "boost", "Supernova", "legendary", 2000, false),
-		_cosmetic("decal_none", "decal", "No Decal", "common", 0, true),
-		_cosmetic("decal_stripes", "decal", "Twin Stripes", "uncommon", 250, false),
-		_cosmetic("decal_hex", "decal", "Hex Shift", "epic", 1100, false),
-		_cosmetic("explosion_standard", "explosion", "Standard Burst", "common", 0, true),
-		_cosmetic("explosion_blackhole", "explosion", "Singularity", "legendary", 2500, false),
-		_cosmetic("antenna_none", "antenna", "No Antenna", "common", 0, true),
-		_cosmetic("antenna_flag", "antenna", "Gravity Flag", "rare", 350, false),
-		_cosmetic("trail_none", "trail", "No Trail", "common", 0, true),
-		_cosmetic("trail_comet", "trail", "Comet", "epic", 1400, false),
-	]
-
-
-func _cosmetic(id: String, type: String, display: String, rarity: String, price: int, owned: bool) -> Dictionary:
-	return {"id": id, "type": type, "name": display, "rarity": rarity, "price": price, "owned": owned}
+	catalog.clear()
+	for item: CosmeticItem in CosmeticLibrary.all():
+		catalog.append({
+			"id": item.id,
+			"type": item.slot,
+			"name": item.display_name,
+			"rarity": item.rarity,
+			"price": item.price,
+			"owned": item.default_owned,
+			"unlock_level": item.unlock_level,
+			"season_only": item.season_only,
+			"description": item.description,
+			"primary_color": item.primary_color,
+			"accent_color": item.accent_color,
+		})
 
 
 func load_profile() -> void:
@@ -134,6 +136,11 @@ func load_profile() -> void:
 	for item: Dictionary in catalog:
 		if item["owned"] and not profile["inventory"].has(item["id"]):
 			profile["inventory"].append(item["id"])
+	profile["loadout"] = CosmeticLibrary.sanitize_loadout(profile.get("loadout", {}))
+	if (profile.get("loadout_presets", []) as Array).is_empty():
+		profile["loadout_presets"] = [{"name": "Default", "loadout": profile["loadout"].duplicate(true)}]
+	if (profile.get("challenges_claimed", {}) as Dictionary).is_empty():
+		profile["challenges_claimed"] = {"daily": [], "weekly": []}
 
 
 func _migrate(data: Dictionary) -> void:
@@ -165,6 +172,21 @@ func _migrate(data: Dictionary) -> void:
 		data["season_wins"] = 0
 		data["season_peak_mmr"] = float(data.get("peak_mmr", data.get("mmr", 1000.0)))
 		data["season_history"] = []
+	if version < 4:
+		# Task 12: presets, career streaks and independent challenge tracks.
+		var sanitized: Dictionary = CosmeticLibrary.sanitize_loadout(data.get("loadout", {}))
+		data["loadout"] = sanitized
+		if not data.has("loadout_presets") or (data.get("loadout_presets", []) as Array).is_empty():
+			data["loadout_presets"] = [{"name": "Default", "loadout": sanitized.duplicate(true)}]
+		data["active_preset"] = int(data.get("active_preset", 0))
+		data["mvp_count"] = int(data.get("mvp_count", 0))
+		data["win_streak"] = int(data.get("win_streak", 0))
+		data["best_win_streak"] = int(data.get("best_win_streak", 0))
+		data["challenges_week"] = str(data.get("challenges_week", ""))
+		if not data.has("challenges_claimed"):
+			data["challenges_claimed"] = {"daily": [], "weekly": []}
+		if not data.has("season_rewards_claimed"):
+			data["season_rewards_claimed"] = []
 	data["version"] = SAVE_VERSION
 
 
@@ -195,10 +217,9 @@ func add_xp(amount: int) -> void:
 		profile["xp"] = int(profile["xp"]) - needed
 		profile["level"] = int(profile["level"]) + 1
 		Events.notification.emit("Level up! Level %d" % profile["level"])
+		Events.level_up.emit(int(profile["level"]))
 		profile["credits"] = int(profile["credits"]) + 100
 		needed = xp_for_level(int(profile["level"]))
-	if int(profile["season_xp"]) >= season_level_xp(int(profile["season_xp"])):
-		pass
 	save_profile()
 
 
@@ -235,6 +256,13 @@ func record_match(won: bool, stats: Dictionary, opponent_mmr: float = -1.0, oppo
 		profile[key] = int(profile[key]) + int(stats.get(key, 0))
 	profile["boost_used"] = float(profile["boost_used"]) + float(stats.get("boost_used", 0.0))
 	profile["playtime"] = float(profile["playtime"]) + float(stats.get("playtime", 0.0))
+	if won:
+		profile["win_streak"] = int(profile.get("win_streak", 0)) + 1
+		profile["best_win_streak"] = maxi(int(profile.get("best_win_streak", 0)), int(profile["win_streak"]))
+	else:
+		profile["win_streak"] = 0
+	if int(stats.get("mvp", 0)) > 0:
+		profile["mvp_count"] = int(profile.get("mvp_count", 0)) + 1
 	var mmr_result := {
 		"delta": 0.0,
 		"mmr": float(profile["mmr"]),
@@ -419,6 +447,7 @@ func start_new_season(now: float = -1.0) -> Dictionary:
 	profile["season_matches"] = 0
 	profile["season_wins"] = 0
 	profile["season_xp"] = 0
+	profile["season_rewards_claimed"] = []
 	profile["season_peak_mmr"] = new_mmr
 	profile["placement_matches"] = 0
 	profile["mmr"] = new_mmr
@@ -505,6 +534,10 @@ func purchase(id: String) -> bool:
 	var item := cosmetic(id)
 	if item.is_empty() or owns(id):
 		return false
+	if bool(item.get("season_only", false)):
+		return false
+	if int(profile.get("level", 1)) < int(item.get("unlock_level", 1)):
+		return false
 	var price: int = int(item["price"])
 	if int(profile["credits"]) < price:
 		return false
@@ -513,6 +546,22 @@ func purchase(id: String) -> bool:
 	save_profile()
 	Events.cosmetics_changed.emit()
 	return true
+
+
+## Explains why a store button is disabled, for menu copy and tests.
+func purchase_block_reason(id: String) -> String:
+	var item := cosmetic(id)
+	if item.is_empty():
+		return "Unknown item"
+	if owns(id):
+		return "Owned"
+	if bool(item.get("season_only", false)):
+		return "Season pass reward"
+	if int(profile.get("level", 1)) < int(item.get("unlock_level", 1)):
+		return "Reach level %d" % int(item.get("unlock_level", 1))
+	if int(profile["credits"]) < int(item["price"]):
+		return "Not enough credits"
+	return ""
 
 
 func equip(id: String) -> bool:
@@ -525,64 +574,376 @@ func equip(id: String) -> bool:
 	return true
 
 
+## Switch a slot back to its default cosmetic (the "unequip" action).
+func unequip(slot: String) -> bool:
+	var default_id := default_item_for(slot)
+	if default_id == "":
+		return false
+	profile["loadout"][slot] = default_id
+	save_profile()
+	Events.cosmetics_changed.emit()
+	return true
+
+
+func default_item_for(slot: String) -> String:
+	for item: Dictionary in catalog:
+		if str(item["type"]) == slot and bool(item["owned"]):
+			return str(item["id"])
+	return str(CosmeticLibrary.default_loadout().get(slot, ""))
+
+
+## Apply a complete loadout, ignoring items the player does not own.
+func set_loadout(loadout: Dictionary) -> bool:
+	var clean: Dictionary = CosmeticLibrary.default_loadout()
+	var changed: bool = false
+	for slot: String in CosmeticLibrary.SLOTS:
+		var id: String = str(loadout.get(slot, ""))
+		if id == "" or not owns(id):
+			continue
+		var item := cosmetic(id)
+		if item.is_empty() or str(item["type"]) != slot:
+			continue
+		clean[slot] = id
+		changed = true
+	profile["loadout"] = clean
+	save_profile()
+	Events.cosmetics_changed.emit()
+	return changed
+
+
 func equipped(type: String) -> String:
-	return str(profile["loadout"].get(type, ""))
+	return str(profile["loadout"].get(type, default_item_for(type)))
+
+
+# --- Loadout presets ---------------------------------------------------------
+
+func save_loadout_preset(name: String) -> int:
+	var preset_name: String = name.strip_edges().left(28)
+	if preset_name == "":
+		preset_name = "Preset %d" % ((profile.get("loadout_presets", []) as Array).size() + 1)
+	var presets: Array = profile.get("loadout_presets", [])
+	var entry := {"name": preset_name, "loadout": profile["loadout"].duplicate(true)}
+	var found: int = -1
+	for i in presets.size():
+		if str((presets[i] as Dictionary).get("name", "")) == preset_name:
+			found = i
+			break
+	if found >= 0:
+		presets[found] = entry
+	else:
+		presets.append(entry)
+		found = presets.size() - 1
+	while presets.size() > 10:
+		presets.pop_front()
+		found = maxi(0, found - 1)
+	profile["loadout_presets"] = presets
+	profile["active_preset"] = found
+	save_profile()
+	Events.cosmetics_changed.emit()
+	return found
+
+
+func apply_loadout_preset(index: int) -> bool:
+	var presets: Array = profile.get("loadout_presets", [])
+	if index < 0 or index >= presets.size():
+		return false
+	var source: Dictionary = presets[index]
+	var applied: bool = set_loadout(source.get("loadout", {}))
+	profile["active_preset"] = index
+	save_profile()
+	return applied
+
+
+func delete_loadout_preset(index: int) -> bool:
+	var presets: Array = profile.get("loadout_presets", [])
+	if presets.size() <= 1 or index < 0 or index >= presets.size():
+		return false
+	presets.remove_at(index)
+	profile["loadout_presets"] = presets
+	profile["active_preset"] = clampi(int(profile.get("active_preset", 0)), 0, presets.size() - 1)
+	save_profile()
+	Events.cosmetics_changed.emit()
+	return true
+
+
+func loadout_preset_names() -> Array[String]:
+	var out: Array[String] = []
+	for preset: Dictionary in profile.get("loadout_presets", []):
+		out.append(str(preset.get("name", "Preset")))
+	return out
+
+
+func grant_cosmetic(id: String) -> bool:
+	if cosmetic(id).is_empty():
+		return false
+	if owns(id):
+		add_credits(100)
+		return false
+	profile["inventory"].append(id)
+	save_profile()
+	return true
 
 
 func _ensure_challenges() -> void:
 	var today := Time.get_date_string_from_system()
-	if str(profile.get("challenges_date", "")) == today and not daily_challenges.is_empty():
-		return
-	profile["challenges_date"] = today
-	profile["challenge_progress"] = {}
-	var rng := RandomNumberGenerator.new()
-	rng.seed = hash(today + str(profile["name"]))
+	var week := _week_key()
+	var dirty: bool = false
+	if str(profile.get("challenges_date", "")) != today:
+		profile["challenges_date"] = today
+		_reset_challenge_track("daily")
+		daily_challenges.clear()
+		dirty = true
+	if str(profile.get("challenges_week", "")) != week:
+		profile["challenges_week"] = week
+		_reset_challenge_track("weekly")
+		weekly_challenges.clear()
+		dirty = true
 	var pool := [
 		{"id": "matches", "text": "Play %d matches", "target": 3, "reward": 200},
 		{"id": "wins", "text": "Win %d matches", "target": 2, "reward": 300},
 		{"id": "goals", "text": "Score %d goals", "target": 5, "reward": 250},
 		{"id": "saves", "text": "Make %d saves", "target": 3, "reward": 250},
 	]
-	daily_challenges.clear()
-	for i in 3:
-		var entry: Dictionary = pool[rng.randi_range(0, pool.size() - 1)].duplicate(true)
-		entry["text"] = str(entry["text"]) % int(entry["target"])
-		entry["kind"] = "daily"
-		entry["claimed"] = false
-		daily_challenges.append(entry)
-	weekly_challenges.clear()
-	for entry_base: Dictionary in pool:
-		var entry: Dictionary = entry_base.duplicate(true)
-		entry["target"] = int(entry["target"]) * 5
-		entry["reward"] = int(entry["reward"]) * 3
-		entry["text"] = str(entry["text"]) % int(entry["target"])
-		entry["kind"] = "weekly"
-		entry["claimed"] = false
-		weekly_challenges.append(entry)
-	save_profile()
+	if daily_challenges.is_empty():
+		var rng := RandomNumberGenerator.new()
+		rng.seed = hash(today + str(profile["name"]))
+		var remaining: Array = pool.duplicate(true)
+		for i in 3:
+			if remaining.is_empty():
+				break
+			var pick: int = rng.randi_range(0, remaining.size() - 1)
+			var entry: Dictionary = (remaining[pick] as Dictionary).duplicate(true)
+			remaining.remove_at(pick)
+			entry["text"] = str(entry["text"]) % int(entry["target"])
+			entry["kind"] = "daily"
+			entry["claimed"] = false
+			daily_challenges.append(entry)
+		dirty = true
+	if weekly_challenges.is_empty():
+		for entry_base: Dictionary in pool:
+			var entry: Dictionary = entry_base.duplicate(true)
+			entry["target"] = int(entry["target"]) * 5
+			entry["reward"] = int(entry["reward"]) * 3
+			entry["text"] = str(entry["text"]) % int(entry["target"])
+			entry["kind"] = "weekly"
+			entry["claimed"] = false
+			weekly_challenges.append(entry)
+		dirty = true
+	if dirty:
+		save_profile()
+
+
+func _week_key(now: float = -1.0) -> String:
+	var ts: float = now if now >= 0.0 else Time.get_unix_time_from_system()
+	# Unix epoch was a Thursday; offset by four days so buckets start Monday.
+	var bucket: int = int(floor((ts + 4.0 * 86400.0) / 604800.0))
+	var year: int = int(Time.get_datetime_dict_from_unix_time(int(ts)).get("year", 0))
+	return "%d-W%d" % [year, bucket]
+
+
+func _reset_challenge_track(kind: String) -> void:
+	var progress: Dictionary = profile.get("challenge_progress", {})
+	var prefix: String = kind + ":"
+	for key: String in progress.keys():
+		if key.begins_with(prefix):
+			progress.erase(key)
+	var claimed: Dictionary = profile.get("challenges_claimed", {})
+	claimed[kind] = []
+	profile["challenges_claimed"] = claimed
 
 
 func _add_challenge_progress(id: String, amount: int) -> void:
 	if amount == 0:
 		return
 	var progress: Dictionary = profile["challenge_progress"]
-	progress[id] = int(progress.get(id, 0)) + amount
+	for kind: String in ["daily", "weekly"]:
+		var key: String = "%s:%s" % [kind, id]
+		progress[key] = int(progress.get(key, 0)) + amount
 
 
 func challenge_state(entry: Dictionary) -> Dictionary:
 	var id: String = str(entry["id"])
-	var progress: int = int(profile["challenge_progress"].get(id, 0))
-	return {"progress": mini(progress, int(entry["target"])), "target": int(entry["target"]), "done": progress >= int(entry["target"])}
+	var kind: String = str(entry.get("kind", "daily"))
+	var progress: int = int(profile["challenge_progress"].get("%s:%s" % [kind, id], 0))
+	var claimed_list: Array = profile.get("challenges_claimed", {}).get(kind, [])
+	return {
+		"progress": mini(progress, int(entry["target"])),
+		"target": int(entry["target"]),
+		"done": progress >= int(entry["target"]),
+		"claimed": claimed_list.has(id),
+	}
 
 
 func claim_challenge(entry: Dictionary) -> bool:
 	var state := challenge_state(entry)
-	if not state["done"]:
+	if not state["done"] or bool(state["claimed"]):
 		return false
 	add_credits(int(entry["reward"]))
+	var claimed: Dictionary = profile.get("challenges_claimed", {})
+	var kind: String = str(entry.get("kind", "daily"))
+	var list: Array = claimed.get(kind, [])
+	list.append(str(entry["id"]))
+	claimed[kind] = list
+	profile["challenges_claimed"] = claimed
 	entry["claimed"] = true
 	save_profile()
 	return true
+
+
+# --- Season pass -------------------------------------------------------------
+
+func season_pass_level() -> int:
+	var xp: int = int(profile.get("season_xp", 0))
+	return clampi(1 + int(xp / SEASON_PASS_XP_PER_LEVEL), 1, SEASON_PASS_LEVELS)
+
+
+func season_pass_progress() -> Dictionary:
+	var xp: int = int(profile.get("season_xp", 0))
+	var level: int = season_pass_level()
+	var into: int = xp - (level - 1) * SEASON_PASS_XP_PER_LEVEL
+	if level >= SEASON_PASS_LEVELS:
+		into = SEASON_PASS_XP_PER_LEVEL
+	into = clampi(into, 0, SEASON_PASS_XP_PER_LEVEL)
+	return {
+		"level": level,
+		"xp": xp,
+		"into": into,
+		"needed": SEASON_PASS_XP_PER_LEVEL,
+		"ratio": float(into) / float(SEASON_PASS_XP_PER_LEVEL),
+		"maxed": level >= SEASON_PASS_LEVELS,
+		"premium": bool(profile.get("premium_pass", false)),
+	}
+
+
+func season_reward(level: int, premium: bool) -> Dictionary:
+	var free_cosmetics := {
+		3: "decal_stripes",
+		7: "wheel_neon",
+		10: "body_interceptor",
+		15: "boost_ion",
+		20: "decal_hex",
+		25: "body_aurora",
+		30: "trail_aurora",
+	}
+	var premium_cosmetics := {
+		2: "antenna_flag",
+		6: "wheel_neon",
+		12: "wheel_gravity",
+		18: "trail_comet",
+		24: "boost_supernova",
+		28: "explosion_blackhole",
+	}
+	var table: Dictionary = premium_cosmetics if premium else free_cosmetics
+	var cosmetic_id: String = str(table.get(level, ""))
+	var credits: int = 0 if cosmetic_id != "" else ((200 + level * 40) if premium else (100 + level * 20))
+	return {
+		"level": level,
+		"premium": premium,
+		"credits": credits,
+		"cosmetic": cosmetic_id,
+		"label": season_reward_label(cosmetic_id, credits),
+	}
+
+
+func season_reward_label(cosmetic_id: String, credits: int) -> String:
+	if cosmetic_id != "":
+		var item := cosmetic(cosmetic_id)
+		if not item.is_empty():
+			return "%s  (%s)" % [str(item["name"]), str(item["rarity"])]
+		return cosmetic_id
+	return "%d credits" % credits
+
+
+func season_reward_claimed(level: int, premium: bool) -> bool:
+	var key: String = "%s:%d" % ["premium" if premium else "free", level]
+	return (profile.get("season_rewards_claimed", []) as Array).has(key)
+
+
+func claim_season_reward(level: int, premium: bool) -> bool:
+	if level < 1 or level > SEASON_PASS_LEVELS:
+		return false
+	if level > season_pass_level():
+		return false
+	if premium and not bool(profile.get("premium_pass", false)):
+		return false
+	if season_reward_claimed(level, premium):
+		return false
+	var reward := season_reward(level, premium)
+	var key: String = "%s:%d" % ["premium" if premium else "free", level]
+	var claimed: Array = profile.get("season_rewards_claimed", [])
+	claimed.append(key)
+	profile["season_rewards_claimed"] = claimed
+	var cosmetic_id: String = str(reward.get("cosmetic", ""))
+	if cosmetic_id != "":
+		grant_cosmetic(cosmetic_id)
+	else:
+		add_credits(int(reward.get("credits", 0)))
+	save_profile()
+	Events.cosmetics_changed.emit()
+	return true
+
+
+func purchase_premium_pass() -> bool:
+	if bool(profile.get("premium_pass", false)):
+		return false
+	if int(profile.get("credits", 0)) < PREMIUM_PASS_COST:
+		return false
+	profile["credits"] = int(profile["credits"]) - PREMIUM_PASS_COST
+	profile["premium_pass"] = true
+	save_profile()
+	Events.cosmetics_changed.emit()
+	return true
+
+
+# --- Career summary ----------------------------------------------------------
+
+func career_summary() -> Dictionary:
+	var matches: int = int(profile.get("matches", 0))
+	var wins: int = int(profile.get("wins", 0))
+	var level: int = int(profile.get("level", 1))
+	var needed: int = xp_for_level(level)
+	return {
+		"name": str(profile.get("name", "Pilot")),
+		"level": level,
+		"xp": int(profile.get("xp", 0)),
+		"xp_needed": needed,
+		"xp_ratio": clampf(float(profile.get("xp", 0)) / float(maxi(needed, 1)), 0.0, 1.0),
+		"total_xp": int(profile.get("total_xp", 0)),
+		"matches": matches,
+		"wins": wins,
+		"losses": int(profile.get("losses", 0)),
+		"win_rate": (float(wins) / float(matches)) if matches > 0 else 0.0,
+		"goals": int(profile.get("goals", 0)),
+		"saves": int(profile.get("saves", 0)),
+		"assists": int(profile.get("assists", 0)),
+		"shots": int(profile.get("shots", 0)),
+		"demolitions": int(profile.get("demolitions", 0)),
+		"mvp_count": int(profile.get("mvp_count", 0)),
+		"boost_used": float(profile.get("boost_used", 0.0)),
+		"playtime": float(profile.get("playtime", 0.0)),
+		"playtime_text": format_playtime(float(profile.get("playtime", 0.0))),
+		"win_streak": int(profile.get("win_streak", 0)),
+		"best_win_streak": int(profile.get("best_win_streak", 0)),
+		"rank": rank_name(),
+		"mmr": float(profile.get("mmr", 1000.0)),
+		"rd": float(profile.get("rd", 350.0)),
+		"peak_mmr": float(profile.get("peak_mmr", 1000.0)),
+		"ranked_matches": int(profile.get("ranked_matches", 0)),
+		"casual_matches": int(profile.get("casual_matches", 0)),
+		"season": int(profile.get("season", 1)),
+		"season_level": season_pass_level(),
+		"season_xp": int(profile.get("season_xp", 0)),
+		"credits": int(profile.get("credits", 0)),
+	}
+
+
+static func format_playtime(seconds: float) -> String:
+	var total: int = maxi(0, int(seconds))
+	var hours: int = total / 3600
+	var minutes: int = (total % 3600) / 60
+	if hours > 0:
+		return "%dh %02dm" % [hours, minutes]
+	return "%dm" % minutes
 
 
 func _on_goal_scored(_team: int, _scorer: int) -> void:

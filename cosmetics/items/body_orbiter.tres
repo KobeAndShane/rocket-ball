@@ -1,0 +1,32 @@
+[gd_resource type="Resource" script_class="CosmeticItem" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://cosmetics/CosmeticItem.gd" id="1_rw70o"]
+
+[resource]
+script = ExtResource("1_rw70o")
+id = "body_orbiter"
+display_name = "Orbiter"
+description = "A rounded gravity-era prototype."
+slot = "body"
+rarity = "epic"
+price = 1500
+unlock_level = 10
+default_owned = false
+season_only = false
+primary_color = Color(0.36, 0.2, 0.62, 1)
+secondary_color = Color(0.234, 0.13, 0.403, 1)
+accent_color = Color(0.9, 0.45, 1, 1)
+metallic = 0.45
+roughness = 0.35
+emission_strength = 0.55
+body_scale = Vector3(1, 1.06, 1)
+body_offset = Vector3(0, 0, 0)
+cabin_scale = Vector3(1.1, 1, 1.05)
+cabin_offset = Vector3(0, 0.44, 0.1)
+wheel_radius = 0.34
+wheel_width = 0.16
+wheel_spokes = 0
+decal_pattern = 0
+antenna_style = 0
+trail_style = 0
+explosion_style = 0

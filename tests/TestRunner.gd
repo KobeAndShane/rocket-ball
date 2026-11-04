@@ -51,6 +51,12 @@ func _run_all() -> void:
 	await _test_matchmaking_population()
 	await _test_matchmaking_service()
 	await _test_matchmaking_menu_launch()
+	await _test_cosmetics_library()
+	await _test_car_cosmetics_neutral()
+	await _test_progression_and_presets()
+	await _test_season_pass()
+	await _test_challenge_tracks()
+	await _test_profile_pages()
 	await _test_car_settles_on_floor()
 	await _test_snapshot_codec()
 	await _test_input_redundancy()
@@ -716,6 +722,189 @@ func _test_matchmaking_menu_launch() -> void:
 	await _cleanup()
 
 
+# --- 12 progression / cosmetics ---------------------------------------------
+
+func _test_cosmetics_library() -> void:
+	_begin("Cosmetic library")
+	var issues := CosmeticLibrary.validate()
+	_check(issues.is_empty(), "catalog is structurally valid", str(issues))
+	var items := CosmeticLibrary.all()
+	_check(items.size() >= 20, "catalog contains at least 20 items", "count=%d" % items.size())
+	_check(CosmeticLibrary.get_item("body_orbiter") != null, "named resource loads")
+	_check(CosmeticLibrary.get_item("missing") == null, "unknown id returns null")
+	for slot: String in CosmeticLibrary.SLOTS:
+		_check(not CosmeticLibrary.items_for_slot(slot).is_empty(), "%s has items" % slot)
+	var default := CosmeticLibrary.default_loadout()
+	_check(default.size() == CosmeticLibrary.SLOTS.size(), "default loadout covers every slot")
+	var clean := CosmeticLibrary.sanitize_loadout({
+		"body": "does_not_exist",
+		"wheel": "body_stock",
+		"boost": "boost_ion",
+	})
+	_check(clean["body"] == "body_stock", "unknown id falls back to default")
+	_check(clean["wheel"] == "wheel_stock", "wrong-slot id falls back to default")
+	_check(clean["boost"] == "boost_ion", "valid id survives sanitising")
+	await _cleanup()
+
+
+func _test_car_cosmetics_neutral() -> void:
+	_begin("Car cosmetics are presentation-only")
+	var car := _track(CAR_SCENE.instantiate() as Car) as Car
+	var tuning := CAR_TUNING.duplicate() as CarTuning
+	car.tuning = tuning
+	add_child(car)
+	await _frames(1)
+	var collider := car.get_node("CollisionShape3D") as CollisionShape3D
+	var before: Vector3 = (collider.shape as BoxShape3D).size
+	var loadout := {
+		"body": "body_orbiter",
+		"wheel": "wheel_neon",
+		"boost": "boost_ion",
+		"trail": "trail_comet",
+		"decal": "decal_hex",
+		"explosion": "explosion_blackhole",
+		"antenna": "antenna_flag",
+	}
+	car.apply_cosmetics(loadout)
+	_check(car.cosmetic_body_id == "body_orbiter", "body cosmetic applied")
+	_check(car.cosmetic_wheel_id == "wheel_neon", "wheel cosmetic applied")
+	_check(car.cosmetic_boost_id == "boost_ion", "boost cosmetic applied")
+	_check(car.cosmetic_decal_id == "decal_hex", "decal cosmetic applied")
+	_check(car.cosmetic_antenna_id == "antenna_flag", "antenna cosmetic applied")
+	_check(car.cosmetic_explosion_id == "explosion_blackhole", "explosion cosmetic stored")
+	var after: Vector3 = (collider.shape as BoxShape3D).size
+	_check(before.is_equal_approx(after), "collider size never changes", "%s -> %s" % [before, after])
+	_check(before.is_equal_approx(tuning.collider_size), "collider still follows tuning")
+	var decal := car.get_node_or_null("DecalMesh") as MeshInstance3D
+	_check(decal != null and decal.visible, "decal overlay is visible")
+	var antenna := car.get_node_or_null("Antenna") as Node3D
+	_check(antenna != null and antenna.visible, "antenna is visible")
+	_check(car.get_node_or_null("BoostTrail") is CPUParticles3D, "boost trail particles exist")
+	var wheels: Array = car.get("_wheel_nodes") as Array
+	_check(wheels.size() == tuning.wheel_offsets.size(), "every wheel exists")
+	car.apply_cosmetics({"body": "nope"})
+	_check(car.cosmetic_body_id == "body_stock", "invalid loadout falls back safely")
+	await _cleanup()
+
+
+func _test_progression_and_presets() -> void:
+	_begin("XP, unlocks, presets and career stats")
+	var original: Dictionary = Meta.profile.duplicate(true)
+	Meta.profile["level"] = 1
+	Meta.profile["xp"] = 0
+	Meta.profile["credits"] = 5000
+	Meta.profile["inventory"] = CosmeticLibrary.default_loadout().values()
+	Meta.profile["loadout"] = CosmeticLibrary.default_loadout()
+	Meta.profile["loadout_presets"] = [{"name": "Default", "loadout": CosmeticLibrary.default_loadout()}]
+	Meta.add_xp(1000)
+	_check(int(Meta.profile["level"]) == 2, "1000 XP levels up", "level=%d" % int(Meta.profile["level"]))
+	_check(int(Meta.profile["credits"]) == 5100, "level up grants credits")
+	_check(not Meta.purchase("body_interceptor"), "store gates on player level")
+	Meta.profile["level"] = 5
+	_check(Meta.purchase("body_interceptor"), "unlocked item can be purchased")
+	_check(Meta.owns("body_interceptor"), "purchase enters the inventory")
+	_check(Meta.equip("body_interceptor"), "owned item equips")
+	_check(Meta.equipped("body") == "body_interceptor", "equipped id round-trips")
+	_check(Meta.unequip("body"), "unequip returns the default body")
+	_check(Meta.equipped("body") == "body_stock", "default body restored")
+	Meta.profile["inventory"].append("wheel_neon")
+	Meta.equip("body_interceptor")
+	Meta.equip("wheel_neon")
+	var preset_index: int = Meta.save_loadout_preset("Test Preset")
+	_check(preset_index >= 0, "preset saves", "index=%d" % preset_index)
+	Meta.set_loadout(CosmeticLibrary.default_loadout())
+	_check(Meta.equipped("body") == "body_stock", "loadout can be reset")
+	_check(Meta.apply_loadout_preset(preset_index), "preset loads")
+	_check(Meta.equipped("body") == "body_interceptor", "preset restores body")
+	_check(Meta.equipped("wheel") == "wheel_neon", "preset restores wheels")
+	_check(Meta.delete_loadout_preset(preset_index), "preset deletes")
+	Meta.profile["matches"] = 10
+	Meta.profile["wins"] = 6
+	Meta.profile["playtime"] = 3660.0
+	var summary := Meta.career_summary()
+	_check(_near(float(summary["win_rate"]), 0.6, 0.001), "career win rate", "%.2f" % float(summary["win_rate"]))
+	_check(str(summary["playtime_text"]) == "1h 01m", "playtime formats", str(summary["playtime_text"]))
+	Meta.profile = original
+	Meta.save_profile()
+	await _cleanup()
+
+
+func _test_season_pass() -> void:
+	_begin("Season pass tracks")
+	var original: Dictionary = Meta.profile.duplicate(true)
+	Meta.profile["season_xp"] = 20000
+	Meta.profile["season_rewards_claimed"] = []
+	Meta.profile["premium_pass"] = false
+	Meta.profile["credits"] = 5000
+	var progress := Meta.season_pass_progress()
+	_check(int(progress["level"]) == 5, "season XP maps to a pass level", "level=%d" % int(progress["level"]))
+	_check(Meta.claim_season_reward(1, false), "free reward claims")
+	_check(not Meta.claim_season_reward(1, false), "free reward cannot be double-claimed")
+	_check(not Meta.claim_season_reward(2, true), "premium reward is gated")
+	_check(Meta.purchase_premium_pass(), "premium track can be unlocked")
+	_check(Meta.claim_season_reward(2, true), "premium reward claims after unlock")
+	_check(not Meta.claim_season_reward(10, false), "locked level cannot be claimed")
+	Meta.profile["season_xp"] = 120000
+	_check(Meta.season_pass_level() == 25, "season level caps at the track", "level=%d" % Meta.season_pass_level())
+	_check(Meta.claim_season_reward(25, false), "season-exclusive cosmetic claims")
+	_check(Meta.owns("body_aurora"), "season reward grants the cosmetic")
+	var reward := Meta.season_reward(25, false)
+	_check(str(reward["cosmetic"]) == "body_aurora", "level 25 free reward is the Aurora body")
+	Meta.profile = original
+	Meta.save_profile()
+	await _cleanup()
+
+
+func _test_challenge_tracks() -> void:
+	_begin("Daily and weekly challenge tracks")
+	var original: Dictionary = Meta.profile.duplicate(true)
+	Meta.profile["challenges_date"] = ""
+	Meta.profile["challenges_week"] = ""
+	Meta.profile["challenge_progress"] = {}
+	Meta.profile["challenges_claimed"] = {"daily": [], "weekly": []}
+	Meta.daily_challenges.clear()
+	Meta.weekly_challenges.clear()
+	Meta._ensure_challenges()
+	_check(Meta.daily_challenges.size() == 3, "three daily challenges", "count=%d" % Meta.daily_challenges.size())
+	_check(Meta.weekly_challenges.size() == 4, "four weekly challenges", "count=%d" % Meta.weekly_challenges.size())
+	Meta._add_challenge_progress("goals", 5)
+	var goal_entry: Dictionary = {}
+	for entry: Dictionary in Meta.weekly_challenges:
+		if str(entry["id"]) == "goals":
+			goal_entry = entry
+	_check(not goal_entry.is_empty(), "weekly goals challenge exists")
+	var state := Meta.challenge_state(goal_entry)
+	_check(int(state["progress"]) == 5, "weekly progress is tracked separately", "progress=%d" % int(state["progress"]))
+	Meta.profile["challenge_progress"]["weekly:goals"] = int(goal_entry["target"])
+	var credits_before: int = int(Meta.profile["credits"])
+	_check(Meta.claim_challenge(goal_entry), "completed weekly challenge claims")
+	_check(int(Meta.profile["credits"]) > credits_before, "challenge pays credits")
+	_check(not Meta.claim_challenge(goal_entry), "challenge cannot be claimed twice")
+	_check(str(Meta._week_key()).begins_with(str(Time.get_datetime_dict_from_system()["year"])), "week key is year-scoped")
+	Meta.profile = original
+	Meta.save_profile()
+	await _cleanup()
+
+
+func _test_profile_pages() -> void:
+	_begin("Profile, locker and season pass pages")
+	var menu := _track(load("res://ui/Main.tscn").instantiate()) as Control
+	add_child(menu)
+	await get_tree().process_frame
+	menu.call("_show_profile")
+	var content := menu.get("content") as VBoxContainer
+	_check(content != null and content.get_child_count() > 0, "profile page builds")
+	menu.call("_show_season_pass")
+	_check(content != null and content.get_child_count() > 0, "season pass page builds")
+	menu.call("_show_locker")
+	await get_tree().process_frame
+	var preview := menu.find_child("LockerPreview", true, false) as CarPreview
+	_check(preview != null, "locker embeds the car preview")
+	if preview != null and preview.car != null:
+		_check(preview.car.get_node_or_null("DecalMesh") != null, "preview car has cosmetics applied")
+	await _cleanup()
+
+
 # --- 01 integration ----------------------------------------------------------
 
 func _test_car_settles_on_floor() -> void:
@@ -851,8 +1040,8 @@ func _test_network_roster() -> void:
 	NetManager.is_server = false
 	NetManager.local_peer_id = 2
 	NetManager.players = {
-		1: {"name": "Host", "team": 1, "car_id": 0, "ready": true, "party": ""},
-		2: {"name": "Client", "team": 1, "car_id": 1, "ready": true, "party": ""},
+		1: {"name": "Host", "team": 1, "car_id": 0, "ready": true, "party": "", "loadout": {"body": "body_interceptor"}},
+		2: {"name": "Client", "team": 1, "car_id": 1, "ready": true, "party": "", "loadout": {"body": "body_orbiter"}},
 	}
 	var rules := RULES.duplicate() as MatchRules
 	rules.team_size = 3
@@ -871,6 +1060,13 @@ func _test_network_roster() -> void:
 	_check(NetManager.cars.size() == 6, "every car is registered with the network")
 	_check(scene.local_car != null and scene.local_car.car_id == 1, "local car follows the lobby assignment")
 	_check(scene.local_car.control_mode == Car.DriveMode.HUMAN, "local car is human-controlled")
+	_check(scene.local_car.cosmetic_body_id == "body_orbiter", "local loadout renders from the lobby", scene.local_car.cosmetic_body_id)
+	var host_car: Car = null
+	for car: Car in scene.cars:
+		if car.car_id == 0:
+			host_car = car
+			break
+	_check(host_car != null and host_car.cosmetic_body_id == "body_interceptor", "remote loadout replicates to this client")
 	var remote_ok := true
 	for car: Car in scene.cars:
 		if car == scene.local_car:

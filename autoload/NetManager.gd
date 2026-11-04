@@ -57,6 +57,7 @@ func _ready() -> void:
 	multiplayer.connection_failed.connect(_on_connection_failed)
 	multiplayer.server_disconnected.connect(_on_server_disconnected)
 	Events.settings_changed.connect(_on_settings_changed)
+	Events.cosmetics_changed.connect(_on_cosmetics_changed)
 	_on_settings_changed("", null)
 	_parse_cmdline()
 
@@ -122,7 +123,7 @@ func host(port: int = DEFAULT_PORT, max_players: int = MAX_PLAYERS) -> Error:
 	is_server = true
 	local_peer_id = 1
 	_reset_clock()
-	players = {1: _player_entry(0, 1, true)}
+	players = {1: _player_entry(0, 1, true, Meta.profile.get("loadout", {}))}
 	cars.clear()
 	_buffers.clear()
 	party = [1]
@@ -151,7 +152,7 @@ func start_offline() -> void:
 	is_server = true
 	local_peer_id = 1
 	_reset_clock()
-	players = {1: _player_entry(0, 1, true)}
+	players = {1: _player_entry(0, 1, true, Meta.profile.get("loadout", {}))}
 	cars.clear()
 	_buffers.clear()
 	party = [1]
@@ -181,13 +182,15 @@ func _reset_clock() -> void:
 	_tick_accum = 0.0
 
 
-func _player_entry(car_id: int, team: int, ready: bool) -> Dictionary:
+func _player_entry(car_id: int, team: int, ready: bool, loadout: Dictionary = {}) -> Dictionary:
+	var clean: Dictionary = CosmeticLibrary.sanitize_loadout(loadout)
 	return {
 		"name": str(Settings.get_setting("net/player_name")),
 		"team": team,
 		"car_id": car_id,
 		"ready": ready,
 		"party": "",
+		"loadout": clean,
 	}
 
 
@@ -216,6 +219,48 @@ func is_lobby_ready() -> bool:
 func _ready_check() -> void:
 	if is_server and is_lobby_ready():
 		Events.network_status_changed.emit("Lobby ready")
+
+
+## Keep the lobby roster's cosmetic loadouts in sync. Clients notify the host,
+## which rebroadcasts the roster so every peer renders the same cars.
+func _on_cosmetics_changed() -> void:
+	if is_offline:
+		return
+	var loadout: Dictionary = CosmeticLibrary.sanitize_loadout(Meta.profile.get("loadout", {}))
+	if players.has(local_peer_id):
+		players[local_peer_id]["loadout"] = loadout
+	if is_server:
+		rpc("_rpc_lobby", players)
+	else:
+		rpc_id(1, "_rpc_set_loadout", loadout)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _rpc_set_loadout(loadout: Dictionary) -> void:
+	if not is_server:
+		return
+	var sender: int = multiplayer.get_remote_sender_id()
+	if not players.has(sender):
+		return
+	players[sender]["loadout"] = CosmeticLibrary.sanitize_loadout(loadout)
+	Events.lobby_changed.emit()
+	lobby_changed.emit()
+	rpc("_rpc_lobby", players)
+
+
+func local_loadout() -> Dictionary:
+	return CosmeticLibrary.sanitize_loadout(Meta.profile.get("loadout", {}))
+
+
+## Resolve the loadout a car should render with, preferring the lobby roster so
+## remote clients see each other's equipped cosmetics.
+func loadout_for_car(car_id: int) -> Dictionary:
+	var peer_id: int = peer_for_car(car_id)
+	if peer_id > 0 and players.has(peer_id):
+		return CosmeticLibrary.sanitize_loadout(players[peer_id].get("loadout", {}))
+	if car_id == local_car_id() or is_offline:
+		return local_loadout()
+	return CosmeticLibrary.default_loadout()
 
 
 func invite(peer_id: int) -> bool:
@@ -570,6 +615,7 @@ func _on_peer_disconnected(id: int) -> void:
 func _on_connected_to_server() -> void:
 	local_peer_id = multiplayer.get_unique_id()
 	joined_server.emit()
+	rpc_id(1, "_rpc_set_loadout", local_loadout())
 	Events.network_status_changed.emit("Connected as peer %d" % local_peer_id)
 
 

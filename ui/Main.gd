@@ -11,6 +11,7 @@ var _updating: bool = false
 var _match: MatchController
 var _mode_description: Label
 var _queue_status: Label
+var _preview_loadout: Dictionary = {}
 
 
 func _ready() -> void:
@@ -19,10 +20,12 @@ func _ready() -> void:
 		_start_dedicated_server()
 		return
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	CosmeticLibrary.preload_async()
 	_build()
 	Events.profile_changed.connect(_refresh_profile)
 	Events.network_status_changed.connect(_on_network_status)
 	Events.notification.connect(_on_notification)
+	Events.level_up.connect(_on_level_up)
 	Events.player_joined.connect(func(_id: int, _name: String) -> void: _refresh_online())
 	Events.player_left.connect(func(_id: int) -> void: _refresh_online())
 	Matchmaking.queue_changed.connect(_on_queue_changed)
@@ -30,6 +33,12 @@ func _ready() -> void:
 	Matchmaking.match_found.connect(_on_matchmaking_found)
 	_refresh_profile()
 	_show_home()
+
+
+func _on_level_up(level: int) -> void:
+	if status_label != null:
+		status_label.text = "Level %d reached" % level
+	_refresh_profile()
 
 
 func _build() -> void:
@@ -50,11 +59,17 @@ func _build() -> void:
 	var hbox := HBoxContainer.new()
 	hbox.add_theme_constant_override("separation", 34)
 	margin.add_child(hbox)
-	# Left column: identity and navigation.
+	# Left column: identity and navigation. Wrapped in a scroll so the growing
+	# progression pages never push the profile card off-screen.
+	var left_scroll := ScrollContainer.new()
+	left_scroll.custom_minimum_size = Vector2(390.0, 0.0)
+	left_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	left_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	hbox.add_child(left_scroll)
 	var left := VBoxContainer.new()
-	left.custom_minimum_size = Vector2(390.0, 0.0)
+	left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	left.add_theme_constant_override("separation", 10)
-	hbox.add_child(left)
+	left_scroll.add_child(left)
 	var title := _label("GRAVITY", 54, Color(0.92, 0.98, 1.0))
 	title.add_theme_constant_override("outline_size", 10)
 	left.add_child(title)
@@ -74,6 +89,8 @@ func _build() -> void:
 	left.add_child(_nav_button("ONLINE", _show_online))
 	left.add_child(_nav_button("LOCKER", _show_locker))
 	left.add_child(_nav_button("CHALLENGES", _show_challenges))
+	left.add_child(_nav_button("PROFILE & STATS", _show_profile))
+	left.add_child(_nav_button("SEASON PASS", _show_season_pass))
 	left.add_child(_nav_button("SETTINGS", _show_settings))
 	left.add_child(_nav_button("QUIT", func() -> void: get_tree().quit()))
 	left.add_child(_spacer(10))
@@ -115,9 +132,10 @@ func _refresh_profile() -> void:
 	if profile_label == null:
 		return
 	var p: Dictionary = Meta.profile
-	profile_label.text = "PILOT  %s\nLEVEL %d   %s   %d credits\nMatches %d   Wins %d   Goals %d" % [
+	profile_label.text = "PILOT  %s\nLEVEL %d   SEASON PASS %d   %s\n%d credits\nMatches %d   Wins %d   Goals %d" % [
 		str(p.get("name", "Pilot")),
 		int(p.get("level", 1)),
+		Meta.season_pass_level(),
 		Meta.rank_name(),
 		int(p.get("credits", 0)),
 		int(p.get("matches", 0)),
@@ -151,6 +169,7 @@ func _clear_content() -> void:
 	content.remove_meta("online")
 	content.remove_meta("ranked")
 	_queue_status = null
+	_preview_loadout.clear()
 	for child in content.get_children():
 		child.queue_free()
 
@@ -322,47 +341,84 @@ func _show_online() -> void:
 func _show_locker() -> void:
 	_clear_content()
 	content.add_child(_heading("LOCKER"))
-	content.add_child(_body("Cosmetics never change hitboxes or gameplay stats. Credits: %d" % int(Meta.profile.get("credits", 0))))
+	content.add_child(_body("Cosmetics never change hitboxes or gameplay stats. Preview anything, then equip what you own. Credits: %d" % int(Meta.profile.get("credits", 0))))
+	if _preview_loadout.is_empty():
+		_preview_loadout = (Meta.profile.get("loadout", {}) as Dictionary).duplicate(true)
+	_preview_loadout = CosmeticLibrary.sanitize_loadout(_preview_loadout)
+	var preview := CarPreview.new()
+	preview.name = "LockerPreview"
+	preview.apply_loadout(_preview_loadout)
+	content.add_child(preview)
+	var preview_actions := HBoxContainer.new()
+	preview_actions.add_theme_constant_override("separation", 10)
+	var restore := _small_button("RESTORE EQUIPPED", func() -> void:
+		_preview_loadout = (Meta.profile.get("loadout", {}) as Dictionary).duplicate(true)
+		_show_locker()
+	, 190)
+	preview_actions.add_child(restore)
+	preview_actions.add_child(_label("Drag-free turntable preview", 13, Color(0.55, 0.7, 0.85)))
+	content.add_child(preview_actions)
+
 	content.add_child(_spacer(6))
+	content.add_child(_section("LOADOUT PRESETS"))
+	var presets: Array = Meta.profile.get("loadout_presets", [])
+	for index in presets.size():
+		var preset: Dictionary = presets[index]
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 10)
+		var lbl := _label(str(preset.get("name", "Preset")), 15, Color(0.85, 0.92, 1.0))
+		lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(lbl)
+		var load_index: int = index
+		var load_btn := _small_button("LOAD", func() -> void:
+			Meta.apply_loadout_preset(load_index)
+			_preview_loadout = (Meta.profile.get("loadout", {}) as Dictionary).duplicate(true)
+			_show_locker()
+		)
+		load_btn.disabled = bool(preset.get("loadout", {}).is_empty())
+		row.add_child(load_btn)
+		var del_btn := _small_button("DELETE", func() -> void:
+			if Meta.delete_loadout_preset(load_index):
+				_show_locker()
+		)
+		del_btn.disabled = presets.size() <= 1
+		row.add_child(del_btn)
+		content.add_child(row)
+	var save_row := HBoxContainer.new()
+	save_row.add_theme_constant_override("separation", 10)
+	var name_edit := LineEdit.new()
+	name_edit.placeholder_text = "Preset name"
+	name_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	name_edit.custom_minimum_size = Vector2(180.0, 34.0)
+	save_row.add_child(name_edit)
+	save_row.add_child(_small_button("SAVE CURRENT", func() -> void:
+		Meta.save_loadout_preset(name_edit.text)
+		_show_locker()
+	, 170))
+	content.add_child(save_row)
+
+	content.add_child(_spacer(6))
+	content.add_child(_section("CATALOG"))
 	var types := ["body", "wheel", "boost", "decal", "explosion", "antenna", "trail"]
 	for type: String in types:
-		content.add_child(_section(type.to_upper()))
-		var grid := GridContainer.new()
-		grid.columns = 1
-		grid.add_theme_constant_override("h_separation", 10)
+		var header := HBoxContainer.new()
+		var type_lbl := _label(type.to_upper(), 13, Color(0.3, 0.8, 1.0))
+		type_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		header.add_child(type_lbl)
+		var equipped_id: String = Meta.equipped(type)
+		if equipped_id != Meta.default_item_for(type):
+			var unequip_type: String = type
+			header.add_child(_small_button("UNEQUIP", func() -> void:
+				Meta.unequip(unequip_type)
+				_preview_loadout = (Meta.profile.get("loadout", {}) as Dictionary).duplicate(true)
+				_show_locker()
+			))
+		content.add_child(header)
 		for item: Dictionary in Meta.catalog:
 			if str(item["type"]) != type:
 				continue
-			var row := HBoxContainer.new()
-			row.add_theme_constant_override("separation", 10)
-			var owned: bool = Meta.owns(str(item["id"]))
-			var equipped: bool = Meta.equipped(type) == str(item["id"])
-			var name_lbl := _label(str(item["name"]), 15, Color(0.85, 0.92, 1.0))
-			name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-			row.add_child(name_lbl)
-			var rarity_lbl := _label(str(item["rarity"]), 12, _rarity_color(str(item["rarity"])))
-			row.add_child(rarity_lbl)
-			var btn := Button.new()
-			btn.custom_minimum_size = Vector2(130.0, 36.0)
-			if equipped:
-				btn.text = "EQUIPPED"
-				btn.disabled = true
-			elif owned:
-				btn.text = "EQUIP"
-				btn.pressed.connect(func() -> void:
-					Meta.equip(str(item["id"]))
-					_show_locker()
-				)
-			else:
-				btn.text = "%d cr" % int(item["price"])
-				btn.disabled = int(Meta.profile.get("credits", 0)) < int(item["price"])
-				btn.pressed.connect(func() -> void:
-					if Meta.purchase(str(item["id"])):
-						_show_locker()
-				)
-			row.add_child(btn)
-			grid.add_child(row)
-		content.add_child(grid)
+			content.add_child(_locker_row(item, preview))
+
 
 
 func _show_challenges() -> void:
@@ -388,8 +444,8 @@ func _challenge_row(entry: Dictionary) -> Control:
 	row.add_child(prog)
 	var btn := Button.new()
 	btn.custom_minimum_size = Vector2(110.0, 34.0)
-	btn.text = "CLAIM %d" % int(entry["reward"])
-	btn.disabled = not bool(state["done"])
+	btn.text = "CLAIMED" if bool(state["claimed"]) else ("CLAIM %d" % int(entry["reward"]))
+	btn.disabled = (not bool(state["done"])) or bool(state["claimed"])
 	btn.pressed.connect(func() -> void:
 		if Meta.claim_challenge(entry):
 			_show_challenges()
@@ -397,6 +453,182 @@ func _challenge_row(entry: Dictionary) -> Control:
 	)
 	row.add_child(btn)
 	return row
+
+
+func _locker_row(item: Dictionary, preview: CarPreview) -> Control:
+	var id: String = str(item["id"])
+	var type: String = str(item["type"])
+	var owned: bool = Meta.owns(id)
+	var equipped: bool = Meta.equipped(type) == id
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	var name_lbl := _label(str(item["name"]), 15, Color(0.85, 0.92, 1.0))
+	name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	name_lbl.tooltip_text = str(item.get("description", ""))
+	row.add_child(name_lbl)
+	row.add_child(_label(str(item["rarity"]), 12, _rarity_color(str(item["rarity"]))))
+	var view_btn := _small_button("PREVIEW", func() -> void:
+		_preview_loadout[type] = id
+		preview.apply_loadout(_preview_loadout)
+	, 96)
+	row.add_child(view_btn)
+	if equipped:
+		var equipped_btn := Button.new()
+		equipped_btn.text = "EQUIPPED"
+		equipped_btn.custom_minimum_size = Vector2(130.0, 34.0)
+		equipped_btn.disabled = true
+		row.add_child(equipped_btn)
+	elif owned:
+		var equip_btn := _small_button("EQUIP", func() -> void:
+			Meta.equip(id)
+			_preview_loadout[type] = id
+			_show_locker()
+		, 130)
+		row.add_child(equip_btn)
+	elif bool(item.get("season_only", false)):
+		var season_btn := Button.new()
+		season_btn.text = "SEASON PASS"
+		season_btn.custom_minimum_size = Vector2(130.0, 34.0)
+		season_btn.disabled = true
+		row.add_child(season_btn)
+	else:
+		var reason: String = Meta.purchase_block_reason(id)
+		var btn := Button.new()
+		btn.custom_minimum_size = Vector2(130.0, 34.0)
+		if reason == "":
+			btn.text = "%d cr" % int(item["price"])
+			btn.pressed.connect(func() -> void:
+				if Meta.purchase(id):
+					_show_locker()
+			)
+		elif reason.begins_with("Reach level"):
+			btn.text = "LVL %d" % int(item.get("unlock_level", 1))
+			btn.disabled = true
+		elif reason == "Not enough credits":
+			btn.text = "%d cr" % int(item["price"])
+			btn.disabled = true
+		else:
+			btn.text = reason
+			btn.disabled = true
+		row.add_child(btn)
+	return row
+
+
+func _show_profile() -> void:
+	_clear_content()
+	content.add_child(_heading("PROFILE & STATS"))
+	var summary := Meta.career_summary()
+	var top := HBoxContainer.new()
+	top.add_theme_constant_override("separation", 18)
+	var icon := RankIcon.new()
+	icon.setup(maxi(Meta.tier_index_for_mmr(float(summary["mmr"])), 0), Meta.division_for_mmr(float(summary["mmr"])), 58.0)
+	top.add_child(icon)
+	var identity := VBoxContainer.new()
+	identity.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var name_row := HBoxContainer.new()
+	name_row.add_child(_label("Name", 14, Color(0.65, 0.78, 0.92)))
+	var name_edit := LineEdit.new()
+	name_edit.text = str(summary["name"])
+	name_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	name_edit.custom_minimum_size = Vector2(180.0, 34.0)
+	name_edit.text_submitted.connect(func(text: String) -> void:
+		Meta.set_player_name(text)
+		_refresh_profile()
+		_show_profile()
+	)
+	name_row.add_child(name_edit)
+	identity.add_child(name_row)
+	identity.add_child(_label("LEVEL %d   %d / %d XP   %s" % [
+		int(summary["level"]), int(summary["xp"]), int(summary["xp_needed"]), str(summary["rank"]),
+	], 17, Color(0.45, 0.9, 1.0)))
+	identity.add_child(_progress_bar(float(summary["xp_ratio"]), Color(0.2, 0.85, 1.0)))
+	top.add_child(identity)
+	content.add_child(top)
+
+	content.add_child(_section("CAREER"))
+	var grid := GridContainer.new()
+	grid.columns = 3
+	grid.add_theme_constant_override("h_separation", 18)
+	grid.add_theme_constant_override("v_separation", 4)
+	grid.add_child(_stat_cell("Matches", str(summary["matches"])))
+	grid.add_child(_stat_cell("Wins", str(summary["wins"])))
+	grid.add_child(_stat_cell("Losses", str(summary["losses"])))
+	grid.add_child(_stat_cell("Win rate", "%.0f%%" % (float(summary["win_rate"]) * 100.0)))
+	grid.add_child(_stat_cell("Goals", str(summary["goals"])))
+	grid.add_child(_stat_cell("Saves", str(summary["saves"])))
+	grid.add_child(_stat_cell("Assists", str(summary["assists"])))
+	grid.add_child(_stat_cell("Shots", str(summary["shots"])))
+	grid.add_child(_stat_cell("Demolitions", str(summary["demolitions"])))
+	grid.add_child(_stat_cell("MVPs", str(summary["mvp_count"])))
+	grid.add_child(_stat_cell("Best win streak", str(summary["best_win_streak"])))
+	grid.add_child(_stat_cell("Playtime", str(summary["playtime_text"])))
+	grid.add_child(_stat_cell("Boost used", "%d" % int(float(summary["boost_used"]))))
+	grid.add_child(_stat_cell("Credits", str(summary["credits"])))
+	grid.add_child(_stat_cell("Total XP", str(summary["total_xp"])))
+	content.add_child(grid)
+
+	content.add_child(_section("COMPETITIVE"))
+	var ranked := GridContainer.new()
+	ranked.columns = 3
+	ranked.add_theme_constant_override("h_separation", 18)
+	ranked.add_child(_stat_cell("MMR", "%d" % int(float(summary["mmr"]))))
+	ranked.add_child(_stat_cell("RD", "%d" % int(float(summary["rd"]))))
+	ranked.add_child(_stat_cell("Peak", "%d" % int(float(summary["peak_mmr"]))))
+	ranked.add_child(_stat_cell("Ranked", str(summary["ranked_matches"])))
+	ranked.add_child(_stat_cell("Casual", str(summary["casual_matches"])))
+	ranked.add_child(_stat_cell("Season", str(summary["season"])))
+	content.add_child(ranked)
+	var history: Array = Meta.profile.get("season_history", [])
+	if not history.is_empty():
+		content.add_child(_section("SEASON HISTORY"))
+		for entry: Dictionary in history:
+			content.add_child(_body("Season %d   %d MMR peak   %d matches   %d wins" % [
+				int(entry.get("season", 0)),
+				int(entry.get("peak_mmr", 0)),
+				int(entry.get("matches", 0)),
+				int(entry.get("wins", 0)),
+			]))
+	content.add_child(_spacer(8))
+	var actions := HBoxContainer.new()
+	actions.add_theme_constant_override("separation", 10)
+	actions.add_child(_small_button("EDIT LOADOUT", _show_locker, 180))
+	actions.add_child(_small_button("SEASON PASS", _show_season_pass, 180))
+	content.add_child(actions)
+
+
+func _show_season_pass() -> void:
+	_clear_content()
+	var progress := Meta.season_pass_progress()
+	content.add_child(_heading("SEASON PASS"))
+	content.add_child(_body("Season %d   Level %d / %d   %d season XP" % [
+		int(Meta.profile.get("season", 1)),
+		int(progress["level"]),
+		Meta.SEASON_PASS_LEVELS,
+		int(progress["xp"]),
+	]))
+	content.add_child(_progress_bar(float(progress["ratio"]), Color(1.0, 0.72, 0.25)))
+	var premium_active: bool = bool(progress["premium"])
+	if premium_active:
+		content.add_child(_label("PREMIUM TRACK ACTIVE", 15, Color(1.0, 0.78, 0.3)))
+	else:
+		var premium_btn := _small_button("UNLOCK PREMIUM TRACK - %d cr" % Meta.PREMIUM_PASS_COST, func() -> void:
+			if Meta.purchase_premium_pass():
+				_show_season_pass()
+				_refresh_profile()
+		, 320)
+		premium_btn.disabled = int(Meta.profile.get("credits", 0)) < Meta.PREMIUM_PASS_COST
+		content.add_child(premium_btn)
+	content.add_child(_body("Free and premium tracks both level up from match XP. Rewards are cosmetics and credits only."))
+	content.add_child(_section("REWARD TRACK"))
+	for level in range(1, Meta.SEASON_PASS_LEVELS + 1):
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 10)
+		var level_lbl := _label("LVL %02d" % level, 14, Color(0.55, 0.82, 1.0))
+		level_lbl.custom_minimum_size = Vector2(64.0, 0.0)
+		row.add_child(level_lbl)
+		row.add_child(_season_reward_cell(level, false, Meta.season_reward(level, false)))
+		row.add_child(_season_reward_cell(level, true, Meta.season_reward(level, true)))
+		content.add_child(row)
 
 
 func _show_ranked() -> void:
@@ -786,6 +1018,71 @@ func _spacer(height: float) -> Control:
 	var c := Control.new()
 	c.custom_minimum_size = Vector2(0.0, height)
 	return c
+
+
+func _season_reward_cell(level: int, premium: bool, reward: Dictionary) -> Control:
+	var box := VBoxContainer.new()
+	box.custom_minimum_size = Vector2(245.0, 0.0)
+	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var header: String = "PREMIUM" if premium else "FREE"
+	var color: Color = Color(1.0, 0.78, 0.3) if premium else Color(0.5, 0.85, 1.0)
+	box.add_child(_label("%s  %s" % [header, str(reward.get("label", ""))], 12, color))
+	var claimed: bool = Meta.season_reward_claimed(level, premium)
+	var unlocked: bool = level <= Meta.season_pass_level()
+	var premium_ok: bool = (not premium) or bool(Meta.profile.get("premium_pass", false))
+	var btn_text: String = "CLAIM"
+	var disabled: bool = false
+	if claimed:
+		btn_text = "CLAIMED"
+		disabled = true
+	elif not unlocked:
+		btn_text = "LOCKED"
+		disabled = true
+	elif not premium_ok:
+		btn_text = "PREMIUM"
+		disabled = true
+	var btn := _small_button(btn_text, func() -> void:
+		if Meta.claim_season_reward(level, premium):
+			_show_season_pass()
+			_refresh_profile()
+	, 100)
+	btn.disabled = disabled
+	box.add_child(btn)
+	return box
+
+
+func _progress_bar(value: float, color: Color) -> ProgressBar:
+	var bar := ProgressBar.new()
+	bar.max_value = 1.0
+	bar.value = clampf(value, 0.0, 1.0)
+	bar.show_percentage = false
+	bar.custom_minimum_size = Vector2(0.0, 18.0)
+	var fill := StyleBoxFlat.new()
+	fill.bg_color = color
+	fill.set_corner_radius_all(6)
+	var bg := StyleBoxFlat.new()
+	bg.bg_color = Color(0.05, 0.09, 0.15, 0.9)
+	bg.set_corner_radius_all(6)
+	bar.add_theme_stylebox_override("fill", fill)
+	bar.add_theme_stylebox_override("background", bg)
+	return bar
+
+
+func _stat_cell(label: String, value: String) -> Control:
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 0)
+	box.add_child(_label(value, 18, Color(0.9, 0.97, 1.0)))
+	box.add_child(_label(label, 12, Color(0.55, 0.68, 0.82)))
+	return box
+
+
+func _small_button(text: String, callback: Callable, width: float = 120.0) -> Button:
+	var btn := Button.new()
+	btn.text = text
+	btn.custom_minimum_size = Vector2(width, 34.0)
+	btn.add_theme_font_size_override("font_size", 13)
+	btn.pressed.connect(callback)
+	return btn
 
 
 func _nav_button(text: String, callback: Callable) -> Button:

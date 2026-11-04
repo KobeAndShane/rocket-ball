@@ -1,0 +1,32 @@
+[gd_resource type="Resource" script_class="CosmeticItem" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://cosmetics/CosmeticItem.gd" id="1_5rotq"]
+
+[resource]
+script = ExtResource("1_5rotq")
+id = "boost_supernova"
+display_name = "Supernova"
+description = "A short-lived star follows every boost."
+slot = "boost"
+rarity = "legendary"
+price = 2000
+unlock_level = 14
+default_owned = false
+season_only = false
+primary_color = Color(1, 0.55, 0.1, 1)
+secondary_color = Color(0.65, 0.3575, 0.065, 1)
+accent_color = Color(1, 0.9, 0.35, 1)
+metallic = 0.45
+roughness = 0.35
+emission_strength = 2.4
+body_scale = Vector3(1, 1, 1)
+body_offset = Vector3(0, 0, 0)
+cabin_scale = Vector3(1, 1, 1)
+cabin_offset = Vector3(0, 0, 0)
+wheel_radius = 0.34
+wheel_width = 0.16
+wheel_spokes = 0
+decal_pattern = 0
+antenna_style = 0
+trail_style = 3
+explosion_style = 0

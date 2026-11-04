@@ -1,0 +1,32 @@
+[gd_resource type="Resource" script_class="CosmeticItem" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://cosmetics/CosmeticItem.gd" id="1_ilqe3"]
+
+[resource]
+script = ExtResource("1_ilqe3")
+id = "wheel_neon"
+display_name = "Neon Spokes"
+description = "Six glowing spokes per wheel."
+slot = "wheel"
+rarity = "rare"
+price = 500
+unlock_level = 3
+default_owned = false
+season_only = false
+primary_color = Color(0.05, 0.05, 0.08, 1)
+secondary_color = Color(0.0325, 0.0325, 0.052, 1)
+accent_color = Color(0.2, 0.95, 1, 1)
+metallic = 0.45
+roughness = 0.35
+emission_strength = 1.8
+body_scale = Vector3(1, 1, 1)
+body_offset = Vector3(0, 0, 0)
+cabin_scale = Vector3(1, 1, 1)
+cabin_offset = Vector3(0, 0, 0)
+wheel_radius = 0.34
+wheel_width = 0.17
+wheel_spokes = 6
+decal_pattern = 0
+antenna_style = 0
+trail_style = 0
+explosion_style = 0

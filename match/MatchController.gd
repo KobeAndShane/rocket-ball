@@ -192,6 +192,10 @@ func _spawn_cars() -> void:
 				car.display_name = "Bot %d" % (next_id + 1)
 			add_child(car)
 			cars.append(car)
+			if car == local_car:
+				car.apply_cosmetics(Meta.profile.get("loadout", {}))
+			else:
+				car.apply_cosmetics(_bot_loadout(car.car_id))
 			(team_cars[team] as Array[Car]).append(car)
 			next_id += 1
 	if rules.fill_with_bots:
@@ -220,6 +224,10 @@ func _spawn_network_cars() -> void:
 		add_child(car)
 		cars.append(car)
 		NetManager.register_car(car)
+		if NetManager.peer_for_car(car.car_id) > 0:
+			car.apply_cosmetics(NetManager.loadout_for_car(car.car_id))
+		else:
+			car.apply_cosmetics(_bot_loadout(car.car_id))
 	for car: Car in cars:
 		var owner_peer: int = NetManager.peer_for_car(car.car_id)
 		if _net_client:
@@ -254,6 +262,28 @@ func _spawn_network_cars() -> void:
 					car.frozen = true
 	if local_car != null:
 		local_car_spawned.emit(local_car)
+
+
+## Deterministic cosmetic variation for bots. Season-exclusive items are never
+## handed to bots so they keep their reward value.
+func _bot_loadout(car_id: int) -> Dictionary:
+	var out: Dictionary = CosmeticLibrary.default_loadout()
+	var choices := {
+		"body": ["body_stock", "body_interceptor", "body_orbiter"],
+		"wheel": ["wheel_stock", "wheel_neon", "wheel_gravity"],
+		"boost": ["boost_standard", "boost_ion", "boost_supernova"],
+		"decal": ["decal_none", "decal_stripes", "decal_hex"],
+		"antenna": ["antenna_none", "antenna_flag"],
+		"trail": ["trail_none", "trail_comet"],
+		"explosion": ["explosion_standard", "explosion_blackhole"],
+	}
+	var rng := RandomNumberGenerator.new()
+	rng.seed = hash("bot_%d" % car_id)
+	for slot: String in CosmeticLibrary.SLOTS:
+		var list: Array = choices.get(slot, [])
+		if not list.is_empty():
+			out[slot] = str(list[rng.randi_range(0, list.size() - 1)])
+	return out
 
 
 func _attach_bot(car: Car) -> void:
@@ -1057,6 +1087,7 @@ func _takeover_car(peer_id: int, human: bool) -> void:
 	if brain != null:
 		brain.queue_free()
 	car.display_name = str(entry.get("name", car.display_name))
+	car.apply_cosmetics(NetManager.loadout_for_car(car.car_id))
 	var playing: bool = state == State.PLAYING or state == State.OVERTIME
 	if human:
 		car.set_local_player(false)

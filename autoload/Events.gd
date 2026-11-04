@@ -37,6 +37,7 @@ signal settings_changed(key: String, value: Variant)
 signal bindings_changed
 signal profile_changed
 signal cosmetics_changed
+signal level_up(level: int)
 signal show_subtitle(text: String, duration: float)
 signal screen_shake(strength: float, duration: float)
 signal goal_explosion(team: int, position: Vector3)
