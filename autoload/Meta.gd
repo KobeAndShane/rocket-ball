@@ -3,7 +3,7 @@ extends Node
 ## Save format is versioned JSON; the backend mirror uses the same shape.
 
 const SAVE_PATH := "user://profile.json"
-const SAVE_VERSION := 4
+const SAVE_VERSION := 5
 const RANK_TIERS := ["Bronze", "Silver", "Gold", "Platinum", "Diamond", "Champion", "Grand Champion"]
 const TIER_SIZE := 300
 const PLACEMENT_MATCHES := 10
@@ -85,6 +85,8 @@ func _default_profile() -> void:
 		"challenges_date": "",
 		"challenges_week": "",
 		"challenges_claimed": {"daily": [], "weekly": []},
+		"training_progress": {},
+		"training_packs_completed": [],
 	}
 	var preset_default := {
 		"name": "Default",
@@ -187,6 +189,12 @@ func _migrate(data: Dictionary) -> void:
 			data["challenges_claimed"] = {"daily": [], "weekly": []}
 		if not data.has("season_rewards_claimed"):
 			data["season_rewards_claimed"] = []
+	if version < 5:
+		# Task 13: training completion and best times.
+		if not data.has("training_progress"):
+			data["training_progress"] = {}
+		if not data.has("training_packs_completed"):
+			data["training_packs_completed"] = []
 	data["version"] = SAVE_VERSION
 
 
@@ -934,6 +942,66 @@ func career_summary() -> Dictionary:
 		"season_level": season_pass_level(),
 		"season_xp": int(profile.get("season_xp", 0)),
 		"credits": int(profile.get("credits", 0)),
+		"training_drills": int((profile.get("training_progress", {}) as Dictionary).size()),
+	}
+
+
+# --- Training ---------------------------------------------------------------
+
+func record_training(pack_id: String, drill_id: String, seconds: float, success: bool) -> void:
+	if pack_id == "" or drill_id == "":
+		return
+	if not profile.has("training_progress") or not (profile["training_progress"] is Dictionary):
+		profile["training_progress"] = {}
+	var progress: Dictionary = profile["training_progress"]
+	var key := "%s/%s" % [pack_id, drill_id]
+	var entry: Dictionary = progress.get(key, {})
+	var was_complete: bool = bool(entry.get("completed", false))
+	entry["attempts"] = int(entry.get("attempts", 0)) + 1
+	entry["last_attempt"] = seconds
+	if success:
+		entry["completed"] = true
+		var best: float = float(entry.get("best_time", 999999.0))
+		entry["best_time"] = minf(best, seconds)
+		entry["completed_at"] = Time.get_unix_time_from_system()
+		if not was_complete:
+			profile["credits"] = int(profile.get("credits", 0)) + 10
+	progress[key] = entry
+	save_profile()
+
+
+func training_drill_completed(pack_id: String, drill_id: String) -> bool:
+	var progress: Dictionary = profile.get("training_progress", {})
+	return bool((progress.get("%s/%s" % [pack_id, drill_id], {}) as Dictionary).get("completed", false))
+
+
+func training_pack_completed(pack_id: String) -> bool:
+	var list: Array = profile.get("training_packs_completed", [])
+	return list.has(pack_id)
+
+
+func mark_training_pack_completed(pack_id: String) -> void:
+	if pack_id == "":
+		return
+	var list: Array = profile.get("training_packs_completed", [])
+	if not list.has(pack_id):
+		list.append(pack_id)
+		profile["training_packs_completed"] = list
+		profile["credits"] = int(profile.get("credits", 0)) + 50
+		Events.notification.emit("Training pack complete: %s" % pack_id)
+		save_profile()
+
+
+func training_summary() -> Dictionary:
+	var progress: Dictionary = profile.get("training_progress", {})
+	var completed := 0
+	for key: Variant in progress.keys():
+		if bool((progress[key] as Dictionary).get("completed", false)):
+			completed += 1
+	return {
+		"drills_completed": completed,
+		"total_attempts": progress.size(),
+		"packs_completed": (profile.get("training_packs_completed", []) as Array).size(),
 	}
 
 

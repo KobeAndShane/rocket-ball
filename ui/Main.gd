@@ -85,6 +85,7 @@ func _build() -> void:
 	left.add_child(_nav_button("FREE PLAY", _start_free_play))
 	left.add_child(_nav_button("PRIVATE MATCH", _show_private))
 	left.add_child(_nav_button("TRAINING", _open_training))
+	left.add_child(_nav_button("REPLAYS", _show_replays))
 	left.add_child(_nav_button("RANKED", _show_ranked))
 	left.add_child(_nav_button("ONLINE", _show_online))
 	left.add_child(_nav_button("LOCKER", _show_locker))
@@ -829,6 +830,79 @@ func _open_training() -> void:
 		get_tree().change_scene_to_file("res://training/Training.tscn")
 	else:
 		_start_match(1, 0, "Free Play")
+
+
+func _show_replays() -> void:
+	_clear_content()
+	content.add_child(_heading("REPLAYS & TRAINING"))
+	content.add_child(_body("Training drills build the fundamentals; replays let you rewatch the goals, saves and gravity shifts that matter. Match replays save automatically at full time."))
+	var summary := Meta.training_summary()
+	var stats := HBoxContainer.new()
+	stats.add_theme_constant_override("separation", 34)
+	stats.add_child(_stat_cell("drills cleared", str(int(summary.get("drills_completed", 0)))))
+	stats.add_child(_stat_cell("packs cleared", str(int(summary.get("packs_completed", 0)))))
+	stats.add_child(_stat_cell("attempts", str(int(summary.get("total_attempts", 0)))))
+	content.add_child(stats)
+	content.add_child(_spacer(8))
+	content.add_child(_section("TRAINING"))
+	content.add_child(_body("Onboarding, gravity, shots, saves, wall plays, aerials and shift drills. Build your own packs in the training editor."))
+	var training_row := HBoxContainer.new()
+	training_row.add_theme_constant_override("separation", 10)
+	training_row.add_child(_small_button("START TRAINING", _open_training, 170.0))
+	training_row.add_child(_small_button("GRAVITY TUTORIAL", func() -> void:
+		TrainingController.selected_pack_id = "gravity"
+		TrainingController.selected_drill_index = 0
+		_open_training()
+	, 180.0))
+	content.add_child(training_row)
+	content.add_child(_section("SAVED REPLAYS"))
+	var entries := ReplayStorage.list()
+	if entries.is_empty():
+		content.add_child(_body("No replays yet. Finish a standard match and it will be saved here."))
+	else:
+		for i in mini(entries.size(), 4):
+			content.add_child(_replay_row(entries[i]))
+	content.add_child(_spacer(8))
+	var replay_row := HBoxContainer.new()
+	replay_row.add_theme_constant_override("separation", 10)
+	var latest := ReplayStorage.latest_path()
+	var watch_latest := _small_button("WATCH LATEST", func() -> void:
+		if latest != "":
+			ReplayStorage.selected_path = latest
+			get_tree().change_scene_to_file("res://replay/Replay.tscn")
+	, 150.0)
+	watch_latest.disabled = latest == ""
+	replay_row.add_child(watch_latest)
+	replay_row.add_child(_small_button("OPEN BROWSER", func() -> void:
+		get_tree().change_scene_to_file("res://replay/ReplayBrowser.tscn")
+	, 150.0))
+	content.add_child(replay_row)
+	content.add_child(_spacer(6))
+	content.add_child(_nav_button("BACK", _show_home))
+
+
+func _replay_row(entry: Dictionary) -> Control:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 12)
+	var lbl := _label("%s  -  %s  -  %d-%d" % [
+		str(entry.get("mode", "Standard")),
+		_fmt_replay_time(float(entry.get("duration", 0.0))),
+		int(entry.get("score1", 0)),
+		int(entry.get("score2", 0)),
+	], 14, Color(0.78, 0.88, 1.0))
+	lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(lbl)
+	var path := str(entry.get("path", ""))
+	row.add_child(_small_button("WATCH", func() -> void:
+		ReplayStorage.selected_path = path
+		get_tree().change_scene_to_file("res://replay/Replay.tscn")
+	, 90.0))
+	return row
+
+
+func _fmt_replay_time(seconds: float) -> String:
+	var total: int = maxi(0, int(seconds))
+	return "%d:%02d" % [total / 60, total % 60]
 
 
 # --- Match launch ------------------------------------------------------------

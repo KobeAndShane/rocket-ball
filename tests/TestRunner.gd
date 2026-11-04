@@ -17,6 +17,7 @@ var _passes: int = 0
 var _failures: Array[String] = []
 var _current: String = ""
 var _spawned: Array[Node] = []
+var _test_replay_path: String = ""
 
 
 func _ready() -> void:
@@ -57,6 +58,12 @@ func _run_all() -> void:
 	await _test_season_pass()
 	await _test_challenge_tracks()
 	await _test_profile_pages()
+	await _test_drill_model()
+	await _test_drill_library()
+	await _test_training_controller()
+	await _test_replay_codec()
+	await _test_replay_recorder_storage()
+	await _test_replay_player_and_browser()
 	await _test_car_settles_on_floor()
 	await _test_snapshot_codec()
 	await _test_input_redundancy()
@@ -896,6 +903,8 @@ func _test_profile_pages() -> void:
 	_check(content != null and content.get_child_count() > 0, "profile page builds")
 	menu.call("_show_season_pass")
 	_check(content != null and content.get_child_count() > 0, "season pass page builds")
+	menu.call("_show_replays")
+	_check(content != null and content.get_child_count() > 0, "replays and training page builds")
 	menu.call("_show_locker")
 	await get_tree().process_frame
 	var preview := menu.find_child("LockerPreview", true, false) as CarPreview
@@ -1078,6 +1087,322 @@ func _test_network_roster() -> void:
 	await _cleanup()
 	NetManager.start_offline()
 	GravityManager.configure(null, 0)
+
+
+func _test_drill_model() -> void:
+	_begin("Training drill model")
+	var drive := DrillBase.from_dict({
+		"id": "drive_test",
+		"title": "Drive test",
+		"success_kind": DrillBase.SuccessKind.DRIVE_DISTANCE,
+		"target_distance": 10.0,
+		"time_limit": 8.0,
+		"enable_phases": [true, false, true, true],
+	})
+	_check(drive.id == "drive_test" and _near(drive.target_distance, 10.0), "drill fields survive a dictionary round trip")
+	_check(drive.enable_phases.size() == 4 and not drive.enable_phases[1], "phase mask round trips")
+	_check(drive.objective_text().contains("10"), "drive objective names the distance")
+	drive.begin(Vector3.ZERO, 0, Vector3.UP)
+	_check(not drive.evaluate({"delta": 0.1, "car_pos": Vector3(5.0, 0.0, 0.0), "up": Vector3.UP, "phase": 0}), "drive is not complete halfway")
+	_check(_near(drive.progress({"car_pos": Vector3(5.0, 0.0, 0.0)}), 0.5, 0.001), "drive progress is a distance ratio")
+	_check(drive.evaluate({"delta": 0.1, "car_pos": Vector3(11.0, 0.0, 0.0), "up": Vector3.UP, "phase": 0}), "drive completes at target distance")
+
+	var touch := DrillBase.new()
+	touch.success_kind = DrillBase.SuccessKind.BALL_TOUCH
+	touch.min_hit_strength = 2.0
+	touch.begin(Vector3.ZERO, 0, Vector3.UP)
+	var base_ctx := {
+		"delta": 0.1, "car_pos": Vector3.ZERO, "car_id": 4,
+		"hit_car_id": -1, "hit_strength": 0.0, "up": Vector3.UP, "phase": 0,
+	}
+	_check(not touch.evaluate(base_ctx), "ball touch ignores another car's hit")
+	var self_hit := base_ctx.duplicate()
+	self_hit["hit_car_id"] = 4
+	self_hit["hit_strength"] = 3.0
+	_check(touch.evaluate(self_hit), "ball touch accepts a strong hit from this car")
+
+	var score := DrillBase.new()
+	score.success_kind = DrillBase.SuccessKind.SCORE
+	score.scoring_team = 1
+	score.require_upside_down = true
+	score.begin(Vector3.ZERO, 0, Vector3.UP)
+	var score_ctx := {
+		"delta": 0.1, "car_pos": Vector3.ZERO, "car_id": 0,
+		"scored_team": 1, "up": Vector3.DOWN, "phase": 2,
+	}
+	_check(score.evaluate(score_ctx), "upside-down goal drill accepts a ceiling goal")
+	score_ctx["up"] = Vector3.UP
+	var upright := DrillBase.new()
+	upright.success_kind = DrillBase.SuccessKind.SCORE
+	upright.require_upside_down = true
+	upright.begin(Vector3.ZERO, 0, Vector3.UP)
+	_check(not upright.evaluate(score_ctx), "upside-down goal drill rejects an upright goal")
+
+	var survive := DrillBase.new()
+	survive.success_kind = DrillBase.SuccessKind.SURVIVE_SHIFT
+	survive.target_time = 1.0
+	survive.begin(Vector3.ZERO, 0, Vector3.UP)
+	_check(not survive.evaluate({"delta": 0.2, "car_pos": Vector3.ZERO, "up": Vector3.UP, "phase": 0}), "shift drill waits for the shift")
+	survive.evaluate({"delta": 0.2, "car_pos": Vector3.ZERO, "up": Vector3.RIGHT, "phase": 3})
+	_check(survive.evaluate({"delta": 1.0, "car_pos": Vector3.ZERO, "up": Vector3.RIGHT, "phase": 3}), "shift drill completes after surviving the shift")
+
+
+func _test_drill_library() -> void:
+	_begin("Training libraries")
+	var all := DrillLibrary.all_packs()
+	_check(all.size() >= DrillLibrary.REQUIRED_PACKS.size(), "built-in packs are present", "packs=%d" % all.size())
+	var found_ids: Array[String] = []
+	for pack: Dictionary in DrillLibrary.built_in_packs():
+		var id := str(pack.get("id", ""))
+		found_ids.append(id)
+		var drills: Array = pack.get("drills", [])
+		var ids: Dictionary = {}
+		var unique := true
+		var valid_time := true
+		for drill: DrillBase in drills:
+			if ids.has(drill.id):
+				unique = false
+			ids[drill.id] = true
+			if drill.title == "" or drill.time_limit <= 0.0:
+				valid_time = false
+		_check(drills.size() >= 2, "%s has drills" % id, "drills=%d" % drills.size())
+		_check(unique, "%s drill ids are unique" % id)
+		_check(valid_time, "%s drills have titles and time limits" % id)
+	for required: String in DrillLibrary.REQUIRED_PACKS:
+		_check(found_ids.has(required), "required pack %s is built in" % required)
+
+	var onboarding := DrillLibrary.onboarding()
+	var onboarding_seconds := 0.0
+	var has_first_goal := false
+	for drill: DrillBase in onboarding:
+		onboarding_seconds += drill.time_limit
+		if drill.success_kind == DrillBase.SuccessKind.SCORE:
+			has_first_goal = true
+	_check(onboarding.size() >= 5, "onboarding covers the starter drills", "drills=%d" % onboarding.size())
+	_check(has_first_goal, "onboarding ends with a first goal")
+	_check(onboarding_seconds < 600.0, "onboarding fits inside ten minutes", "budget=%.0fs" % onboarding_seconds)
+	var coverage: Dictionary = {}
+	for drill: DrillBase in onboarding:
+		coverage[drill.id] = true
+	for starter: String in DrillLibrary.starter_drill_ids():
+		_check(coverage.has(starter), "onboarding includes %s" % starter)
+
+	var gravity := DrillLibrary.gravity_tutorial()
+	var kinds: Dictionary = {}
+	for drill: DrillBase in gravity:
+		kinds[drill.success_kind] = true
+	_check(kinds.has(DrillBase.SuccessKind.WALL_DRIVE), "gravity tutorial has a wall drive")
+	_check(kinds.has(DrillBase.SuccessKind.CEILING_TOUCH), "gravity tutorial has a ceiling landing")
+	_check(kinds.has(DrillBase.SuccessKind.SCORE), "gravity tutorial has a scoring drill")
+
+	var pack_name := "task13_test_%d" % Time.get_ticks_msec()
+	var draft := DrillBase.new()
+	draft.id = "saved_drill"
+	draft.title = "Saved drill"
+	draft.time_limit = 12.0
+	draft.success_kind = DrillBase.SuccessKind.JUMP
+	var drills: Array[DrillBase] = [draft]
+	_check(DrillLibrary.validate_pack(drills).is_empty(), "valid packs pass validation")
+	var issues := DrillLibrary.validate_pack([draft, draft])
+	_check(not issues.is_empty(), "duplicate drill ids fail validation")
+	var path := DrillLibrary.save_user_pack(pack_name, drills, "test pack")
+	_check(path != "" and FileAccess.file_exists(path), "user pack saves to disk", path)
+	var loaded := DrillLibrary.load_user_pack(path)
+	_check(not loaded.is_empty() and (loaded.get("drills", []) as Array).size() == 1, "user pack loads back")
+	if not loaded.is_empty():
+		var loaded_drill: DrillBase = (loaded.get("drills", []) as Array)[0]
+		_check(loaded_drill.id == "saved_drill" and loaded_drill.success_kind == DrillBase.SuccessKind.JUMP, "user pack preserves drill data")
+	_check(DrillLibrary.pack_by_id(str(loaded.get("id", ""))).get("id", "") == str(loaded.get("id", "")), "saved pack is discoverable by id")
+	_check(DrillLibrary.delete_user_pack(path), "user pack deletes from disk")
+
+
+func _test_training_controller() -> void:
+	_begin("Training controller")
+	TrainingController.selected_pack_id = "onboarding"
+	TrainingController.selected_drill_index = 0
+	var scene := _track(load("res://training/Training.tscn").instantiate()) as TrainingController
+	add_child(scene)
+	await get_tree().process_frame
+	_check(scene.pack.get("id", "") == "onboarding", "training boots into onboarding")
+	_check(scene.drills.size() == 6, "onboarding loads six drills", "drills=%d" % scene.drills.size())
+	_check(scene.car != null and scene.ball != null, "training spawns a car and a ball")
+	_check(scene.car.control_mode == Car.DriveMode.HUMAN and scene.car.is_local_player_visual(), "training car is human-controlled")
+	_check(scene.running and scene.drill != null, "the first drill starts running")
+	_check(scene.headless_mode, "training detects the headless display")
+
+	scene.start_pack("gravity", 0)
+	_check(scene.pack.get("id", "") == "gravity", "pack switching works")
+	_check(scene.drills.size() == 3, "gravity pack has three guided drills")
+	_check(scene.drill.success_kind == DrillBase.SuccessKind.WALL_DRIVE, "gravity pack opens on the wall drive")
+	_check(scene.car.global_position.distance_to(scene.drill.car_spawn) < 1.0, "drill spawn moves the car")
+
+	scene.start_pack("shots", 0)
+	_check(scene.pack.get("id", "") == "shots", "shots pack loads")
+	_check(scene.drill.success_kind == DrillBase.SuccessKind.SCORE, "shots drill asks for a goal")
+	scene.place_ball(Vector3(3.0, -8.0, 4.0), Vector3(0.0, 0.0, 12.0))
+	_check(scene.ball.global_position.distance_to(Vector3(3.0, -8.0, 4.0)) < 0.05, "editor can place the ball")
+	_check(scene.ball.freeze, "placed editor ball stays frozen until launch")
+
+	scene.start_pack("missing_pack", 99)
+	_check(scene.pack.get("id", "") == "onboarding", "unknown packs fall back to onboarding")
+	_check(scene.current_index == 0, "drill index is clamped when the pack changes")
+	GravityManager.stop()
+	await _cleanup()
+
+
+func _test_replay_codec() -> void:
+	_begin("Replay codec")
+	GravityManager.configure(null, 0)
+	var car := _track(CAR_SCENE.instantiate() as Car) as Car
+	car.car_id = 7
+	car.team = 2
+	car.display_name = "Recorder"
+	car.tuning = CAR_TUNING.duplicate() as CarTuning
+	add_child(car)
+	var ball := _track(BALL_SCENE.instantiate() as Ball) as Ball
+	add_child(ball)
+	await get_tree().process_frame
+	car.global_transform = Transform3D(Basis(Vector3.UP, 0.4), Vector3(1.5, -10.0, 2.25))
+	car.linear_velocity = Vector3(3.0, 1.0, -2.0)
+	ball.global_transform = Transform3D(Basis.IDENTITY, Vector3(-4.0, -11.0, 8.0))
+	ball.linear_velocity = Vector3(5.0, 0.0, -1.0)
+	ball.angular_velocity = Vector3(0.0, 2.0, 0.0)
+
+	var data := ReplayData.new()
+	data.created = 1234.0
+	data.mode = "Standard"
+	data.score1 = 2
+	data.score2 = 1
+	data.initial = {
+		"cars": [ReplayData.initial_car(car)],
+		"ball": ReplayData.encode_ball(ball),
+		"phase": 0,
+	}
+	var first := data.add_input(10, car)
+	_check(first, "first input row is stored")
+	var duplicate := data.add_input(11, car)
+	_check(not duplicate, "unchanged input is deduplicated")
+	car.input.boost = true
+	car.input.throttle = 1.0
+	_check(data.add_input(12, car), "changed input starts a new row")
+	var at := data.inputs_at(12)
+	_check(at.has(7) and (at[7] as CarInput).boost, "inputs replay by car id")
+	_check((at[7] as CarInput).throttle > 0.9, "analogue throttle survives encoding")
+
+	var row := ReplayData.encode_car(car)
+	var decoded := ReplayData.decode_car(row)
+	_check((decoded.get("p", Vector3.ZERO) as Vector3).distance_to(car.global_position) < 0.01, "car row round trips position")
+	_check((decoded.get("q", Quaternion.IDENTITY) as Quaternion).dot(car.global_transform.basis.get_rotation_quaternion()) > 0.99, "car row round trips rotation")
+	_check(_near(float(decoded.get("b", -1.0)), car.boost_component.amount, 0.2), "car row keeps boost")
+
+	var ball_row := ReplayData.encode_ball(ball)
+	var ball_decoded := ReplayData.decode_ball(ball_row)
+	_check((ball_decoded.get("p", Vector3.ZERO) as Vector3).distance_to(ball.global_position) < 0.01, "ball row round trips position")
+	_check((ball_decoded.get("w", Vector3.ZERO) as Vector3).distance_to(ball.angular_velocity) < 0.01, "ball row round trips spin")
+
+	data.add_snapshot(0, [car], ball, 0, 0, 0)
+	car.global_position = Vector3(10.0, -10.0, 5.0)
+	ball.global_position = Vector3(0.0, -9.0, 12.0)
+	data.add_snapshot(30, [car], ball, 1, 1, 0)
+	_check(int(data.snapshot_before(15).get("t", -1)) == 0, "snapshot lookup finds the earlier frame")
+	_check(int(data.snapshot_after(15).get("t", -1)) == 30, "snapshot lookup finds the later frame")
+	_check(int(data.snapshot_before(99).get("t", -1)) == 30, "snapshot lookup clamps to the last frame")
+
+	var as_json := JSON.stringify(data.to_dict())
+	var parsed: Variant = JSON.parse_string(as_json)
+	_check(parsed is Dictionary, "replay serialises to JSON")
+	var restored := ReplayData.from_dict(parsed as Dictionary)
+	_check(restored.score1 == 2 and restored.score2 == 1, "JSON round trip keeps the score")
+	_check(restored.snapshots.size() == 2 and restored.inputs.size() == 2, "JSON round trip keeps streams")
+	_check(restored.summary().get("tick_rate", 0) == 120, "summary exposes the tick rate")
+	GravityManager.configure(null, 0)
+	await _cleanup()
+
+
+func _test_replay_recorder_storage() -> void:
+	_begin("Replay recorder and storage")
+	var rules := RULES.duplicate() as MatchRules
+	rules.team_size = 1
+	rules.fill_with_bots = true
+	rules.replay_enabled = false
+	rules.match_duration = 3600.0
+	rules.kickoff_countdown = 0.0
+	var scene := _track(MATCH_SCENE.instantiate() as MatchController) as MatchController
+	scene.rules = rules
+	scene.auto_start = true
+	scene.headless_mode = true
+	scene.spawn_camera = false
+	scene.spawn_hud = false
+	add_child(scene)
+	await _frames(3)
+	_check(not scene.cars.is_empty(), "recorder has cars to sample")
+
+	var recorder := ReplayRecorder.new()
+	scene.add_child(recorder)
+	recorder.setup(scene)
+	recorder.start()
+	await _frames(8)
+	_check(recorder.recording, "recorder is running")
+	_check(recorder.data != null, "recorder creates a replay stream")
+	_check(recorder.data.initial.get("cars", []).size() == scene.cars.size(), "initial state captures every car")
+	_check(not recorder.data.inputs.is_empty(), "inputs are sampled", "rows=%d" % (recorder.data.inputs.size() if recorder.data != null else -1))
+	_check(not recorder.data.snapshots.is_empty(), "snapshots are sampled")
+	_check(recorder.data.tick_rate == 120, "recorder uses the physics tick rate")
+	recorder._tick = 120
+	var path := recorder.finish_and_save()
+	_check(path != "" and FileAccess.file_exists(path), "finished replay is saved to user://", path)
+	_test_replay_path = path
+	if path != "":
+		var listed := ReplayStorage.list()
+		var found := false
+		for entry: Dictionary in listed:
+			if str(entry.get("path", "")) == path:
+				found = true
+		_check(found, "saved replay appears in the browser listing")
+		var loaded := ReplayStorage.load_path(path)
+		_check(loaded != null and loaded.snapshots.size() >= 2, "saved replay reloads with snapshots")
+		_check(ReplayStorage.latest_path() == path, "newest replay is reported as latest")
+	await _cleanup()
+	GravityManager.configure(null, 0)
+
+
+func _test_replay_player_and_browser() -> void:
+	_begin("Replay player and browser")
+	_check(_test_replay_path != "" and FileAccess.file_exists(_test_replay_path), "test replay exists for playback")
+	if _test_replay_path == "":
+		return
+	ReplayStorage.selected_path = _test_replay_path
+	var player := _track(load("res://replay/Replay.tscn").instantiate()) as ReplayPlayer
+	add_child(player)
+	await get_tree().process_frame
+	_check(player.data != null, "player loads the selected replay")
+	_check(player.cars.size() >= 2, "player rebuilds the recorded roster", "cars=%d" % player.cars.size())
+	_check(player.ball != null, "player rebuilds the ball")
+	_check(player.duration >= 0.9, "player exposes the replay duration", "duration=%.2f" % player.duration)
+	player.seek(player.duration * 0.5)
+	_check(player.current_tick > 0, "scrubbing advances the playback tick")
+	var cars_at_seek := 0
+	for car: Car in player.cars:
+		if car.visible:
+			cars_at_seek += 1
+	_check(cars_at_seek > 0, "cars are visible after a scrub")
+	player._toggle_free_camera()
+	_check(player.free_camera and player.camera != null and player.camera.free_camera, "free camera toggles on")
+	player._toggle_play()
+	_check(not player.playing, "playback can pause")
+	await _cleanup()
+	ReplayStorage.selected_path = ""
+
+	var browser := _track(load("res://replay/ReplayBrowser.tscn").instantiate()) as Control
+	add_child(browser)
+	await get_tree().process_frame
+	browser.call("refresh")
+	var rows := browser.get("_rows") as VBoxContainer
+	_check(rows != null and rows.get_child_count() >= 1, "browser lists at least the recorded replay", "rows=%d" % (rows.get_child_count() if rows != null else -1))
+	await _cleanup()
+	_check(ReplayStorage.delete_path(_test_replay_path), "replay can be deleted")
+	_check(not FileAccess.file_exists(_test_replay_path), "deleted replay is gone from disk")
+	_test_replay_path = ""
 
 
 func _report() -> void:

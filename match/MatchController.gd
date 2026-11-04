@@ -58,6 +58,7 @@ var _recorded: bool = false
 var _match_seed: int = 0
 var _pause_was_gravity_active: bool = false
 var _base_rules: MatchRules
+var _replay_recorder: ReplayRecorder
 
 # Networking
 var _online: bool = false
@@ -162,6 +163,16 @@ func _spawn_world() -> void:
 			if hud.has_method("setup"):
 				hud.call("setup", self)
 	_spawn_audio()
+	_spawn_replay_recorder()
+
+
+func _spawn_replay_recorder() -> void:
+	if _net_client or headless_mode or all_bots:
+		return
+	_replay_recorder = ReplayRecorder.new()
+	_replay_recorder.name = "ReplayRecorder"
+	add_child(_replay_recorder)
+	_replay_recorder.setup(self)
 
 
 func _spawn_cars() -> void:
@@ -470,6 +481,8 @@ func _start_play() -> void:
 	GravityManager.active = true
 	_timer_running = true
 	_goal_active = false
+	if _replay_recorder != null:
+		_replay_recorder.start()
 	Events.countdown_changed.emit(0)
 	Events.match_state_changed.emit(state, previous)
 
@@ -758,6 +771,8 @@ func _end_match() -> void:
 	Events.timer_changed.emit(0.0)
 	Events.stats_updated.emit(summary)
 	Events.match_state_changed.emit(state, previous)
+	if _replay_recorder != null:
+		_replay_recorder.finish_and_save()
 	if local_car != null and not _recorded:
 		_recorded = true
 		var local_stats: Dictionary = (_stats[local_car.car_id] as Dictionary).duplicate()
