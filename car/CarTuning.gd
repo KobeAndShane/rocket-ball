@@ -68,6 +68,10 @@ extends Resource
 @export var demolish_speed: float = 22.0
 @export var demolish_respawn_time: float = 3.0
 
+@export_group("Safety")
+## Auto-reset a car that has been stationary on a surface for this long.
+@export var unstuck_time: float = 5.0
+
 @export_group("Network")
 @export var prediction_max_error: float = 0.35
 @export var prediction_smooth_rate: float = 12.0

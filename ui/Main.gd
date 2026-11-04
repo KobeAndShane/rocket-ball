@@ -59,6 +59,8 @@ func _build() -> void:
 	left.add_child(_nav_button("QUICK PLAY  -  3v3", _quick_play))
 	left.add_child(_nav_button("1v1", func() -> void: _start_match(1, 1, "1v1")))
 	left.add_child(_nav_button("2v2", func() -> void: _start_match(2, 1, "2v2")))
+	left.add_child(_nav_button("FREE PLAY", _start_free_play))
+	left.add_child(_nav_button("PRIVATE MATCH", _show_private))
 	left.add_child(_nav_button("TRAINING", _open_training))
 	left.add_child(_nav_button("RANKED", _show_ranked))
 	left.add_child(_nav_button("ONLINE", _show_online))
@@ -151,6 +153,7 @@ func _show_home() -> void:
 	content.add_child(_bullet("Drive on any surface", "Wheels stick to walls and ceilings. Gravity is your compass, not your limit."))
 	content.add_child(_bullet("Read the shift", "A five second warning shows the next gravity direction. Use it to reposition."))
 	content.add_child(_bullet("Boost, jump, dodge", "Classic car-soccer controls with a full air-control system."))
+	content.add_child(_bullet("Play your way", "1v1, 2v2, 3v3, free play, or a private match with stacking mutators."))
 	content.add_child(_spacer(10))
 	var hint := _label("Quick Play starts a 3v3 match with bots. Press Esc in a match to pause.", 14, Color(0.55, 0.7, 0.85))
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -361,6 +364,78 @@ func _show_ranked() -> void:
 		content.add_child(row)
 
 
+func _show_private() -> void:
+	_clear_content()
+	content.add_child(_heading("PRIVATE MATCH"))
+	content.add_child(_body("Choose a format, a bot difficulty and any combination of mutators. Mutators are applied to a fresh copy of the rules at kickoff, so they never change your saved defaults."))
+	content.add_child(_section("FORMAT"))
+	var team := OptionButton.new()
+	for label: String in ["1v1", "2v2", "3v3"]:
+		team.add_item(label)
+	team.selected = 2
+	team.custom_minimum_size = Vector2(160.0, 36.0)
+	content.add_child(team)
+	var tier := OptionButton.new()
+	for label: String in ["Rookie", "Pro", "All-Star", "Champion"]:
+		tier.add_item(label)
+	tier.selected = 1
+	tier.custom_minimum_size = Vector2(160.0, 36.0)
+	content.add_child(tier)
+	var interval := OptionButton.new()
+	for label: String in ["20 s shifts", "30 s shifts", "45 s shifts"]:
+		interval.add_item(label)
+	interval.selected = 1
+	interval.custom_minimum_size = Vector2(160.0, 36.0)
+	content.add_child(interval)
+	var theme_pick := OptionButton.new()
+	for label: String in ["Neon Grid", "Cryo Ice", "Solar Lava"]:
+		theme_pick.add_item(label)
+	theme_pick.selected = 0
+	theme_pick.custom_minimum_size = Vector2(160.0, 36.0)
+	content.add_child(theme_pick)
+	content.add_child(_section("MUTATORS"))
+	var checks: Dictionary = {}
+	for entry: Dictionary in MutatorLibrary.catalog():
+		var check := CheckButton.new()
+		check.text = "%s - %s" % [str(entry["name"]), str(entry["description"])]
+		check.add_theme_font_size_override("font_size", 13)
+		check.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		content.add_child(check)
+		checks[str(entry["id"])] = check
+	content.add_child(_spacer(10))
+	content.add_child(_nav_button("START PRIVATE MATCH", func() -> void:
+		var ids: Array = []
+		for id: Variant in checks.keys():
+			if (checks[id] as CheckButton).button_pressed:
+				ids.append(id)
+		var selected := MutatorLibrary.validate(MutatorLibrary.build(ids))
+		var rules := MATCH_RULES.duplicate() as MatchRules
+		rules.team_size = team.selected + 1
+		rules.bot_tier = tier.selected
+		rules.mode_name = "Private"
+		rules.mode_id = "private"
+		rules.mutators = selected
+		rules.gravity_interval = [20.0, 30.0, 45.0][interval.selected]
+		rules.arena_theme_index = theme_pick.selected
+		rules.fill_with_bots = true
+		_launch(rules)
+	))
+	content.add_child(_nav_button("BACK", _show_home))
+
+
+func _start_free_play() -> void:
+	var rules := MATCH_RULES.duplicate() as MatchRules
+	rules.team_size = 1
+	rules.match_duration = 3600.0
+	rules.overtime_enabled = false
+	rules.replay_enabled = false
+	rules.fill_with_bots = false
+	rules.mode_name = "Free Play"
+	rules.mode_id = "free_play"
+	rules.free_play = true
+	_launch(rules)
+
+
 func _open_training() -> void:
 	if ResourceLoader.exists("res://training/Training.tscn"):
 		get_tree().change_scene_to_file("res://training/Training.tscn")
@@ -375,15 +450,20 @@ func _quick_play() -> void:
 
 
 func _start_match(team_size: int, bot_tier: int, mode_name: String) -> void:
-	if _match != null:
-		return
 	var rules := MATCH_RULES.duplicate() as MatchRules
 	rules.team_size = team_size
 	rules.bot_tier = bot_tier
 	rules.mode_name = mode_name
+	rules.mode_id = mode_name.to_lower().replace(" ", "_")
 	rules.fill_with_bots = true
 	if NetManager.is_server and not NetManager.is_offline:
 		rules.team_size = team_size
+	_launch(rules)
+
+
+func _launch(rules: MatchRules) -> void:
+	if _match != null:
+		return
 	var node := MATCH_SCENE.instantiate() as MatchController
 	node.rules = rules
 	node.auto_start = true

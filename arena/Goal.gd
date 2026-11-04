@@ -105,6 +105,18 @@ func reset_latch() -> void:
 	_latched = false
 
 
+func apply_theme(theme: ArenaTheme) -> void:
+	if theme == null or _frame_material == null:
+		return
+	var team_color := Settings.get_color("a11y/team1_color") if defending_team == 1 and Settings.get_bool("a11y/team_color_override") else Color(0.18, 0.64, 1.0)
+	if defending_team == 2:
+		team_color = Settings.get_color("a11y/team2_color") if Settings.get_bool("a11y/team_color_override") else Color(1.0, 0.42, 0.16)
+	_frame_material.albedo_color = team_color
+	_frame_material.emission = team_color
+	if _net_material != null:
+		_net_material.set_shader_parameter("net_color", Color(team_color.r, team_color.g, team_color.b, 0.28))
+
+
 func set_enabled(value: bool) -> void:
 	enabled = value
 	if value:

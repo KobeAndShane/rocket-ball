@@ -57,11 +57,13 @@ var _match_time: float = 0.0
 var _recorded: bool = false
 var _match_seed: int = 0
 var _pause_was_gravity_active: bool = false
+var _base_rules: MatchRules
 
 
 func _ready() -> void:
 	if rules == null:
 		rules = load("res://match/MatchRules.tres") as MatchRules
+	_base_rules = rules.duplicate() as MatchRules
 	headless_mode = headless_mode or DisplayServer.get_name() == "headless"
 	_match_seed = int(Time.get_unix_time_from_system())
 	_spawn_world()
@@ -126,7 +128,10 @@ func _spawn_world() -> void:
 func _spawn_cars() -> void:
 	var team_cars: Dictionary = {1: [] as Array[Car], 2: [] as Array[Car]}
 	var next_id := 0
-	for team: int in [1, 2]:
+	var teams: Array[int] = [1]
+	if not rules.free_play:
+		teams.append(2)
+	for team: int in teams:
 		for i in rules.team_size:
 			var car := CAR_SCENE.instantiate() as Car
 			car.team = team
@@ -182,6 +187,7 @@ func _spawn_audio() -> void:
 
 
 func start_match() -> void:
+	_apply_mutators()
 	score1 = 0
 	score2 = 0
 	time_left = rules.match_duration
@@ -195,6 +201,8 @@ func start_match() -> void:
 	_last_boost.clear()
 	_last_hit.clear()
 	_last_hitters.clear()
+	if ball != null:
+		ball.set_radius(BASE_BALL_TUNING.radius * rules.ball_radius_scale, BASE_BALL_TUNING.mass * rules.ball_mass_scale)
 	for car: Car in cars:
 		_stats[car.car_id] = {
 			"name": car.display_name,
@@ -208,9 +216,46 @@ func start_match() -> void:
 			"boost_used": 0.0,
 			"playtime": 0.0,
 		}
+		car.tuning.unstuck_time = rules.unstuck_time
 	GravityManager.configure(rules, _match_seed)
 	Events.score_changed.emit(score1, score2)
 	_begin_kickoff(State.PLAYING)
+
+
+## Rebuild the working rules from the authored preset each match, then stack the
+## enabled mutators in order. Arena/ball/boost consumers read the result at
+## kickoff, so mutators never corrupt the source resource.
+func _apply_mutators() -> void:
+	if _base_rules == null:
+		return
+	var working := _base_rules.duplicate() as MatchRules
+	var built: Array[Resource] = []
+	for entry: Resource in working.mutators:
+		var mutator := entry as MutatorBase
+		if mutator == null or not mutator.enabled:
+			continue
+		built.append(mutator)
+	working.mutators = built
+	for entry: Resource in working.mutators:
+		(entry as MutatorBase).apply(working, self)
+	rules = working
+	if arena != null:
+		arena.rules = rules
+		if arena.theme != null:
+			var themes := ["res://arena/ArenaTheme.tres", "res://arena/ArenaTheme_Ice.tres", "res://arena/ArenaTheme_Lava.tres"]
+			var idx: int = clampi(rules.arena_theme_index, 0, themes.size() - 1)
+			if ResourceLoader.exists(themes[idx]):
+				arena.theme = load(themes[idx]) as ArenaTheme
+				arena.apply_theme(arena.theme)
+
+
+func mutator_names() -> Array[String]:
+	var out: Array[String] = []
+	for entry: Resource in rules.mutators:
+		var mutator := entry as MutatorBase
+		if mutator != null and mutator.enabled:
+			out.append(mutator.display_name)
+	return out
 
 
 func _begin_kickoff(next_state: State) -> void:

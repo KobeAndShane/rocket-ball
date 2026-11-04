@@ -39,6 +39,8 @@ func _run_all() -> void:
 	await _test_goal_fires_once()
 	await _test_pad_symmetry()
 	await _test_rules_defaults()
+	await _test_mutators()
+	await _test_free_play_spawn()
 	await _test_match_timer_and_overtime()
 	await _test_demo_respawn()
 	await _test_rank_helpers()
@@ -312,6 +314,61 @@ func _test_rules_defaults() -> void:
 	_check(rules.gravity_transition == 2.0, "transition 2 s")
 	_check(rules.replay_enabled, "replays enabled")
 	_check(rules.enabled_phases.size() == 4, "four enabled phases")
+
+
+func _test_mutators() -> void:
+	_begin("Mutators")
+	var rules := RULES.duplicate() as MatchRules
+	var list := MutatorLibrary.build(["low_gravity", "big_ball", "fast_shift"])
+	_check(list.size() == 3, "three mutators built")
+	for entry: Resource in list:
+		(entry as MutatorBase).apply(rules, null)
+	_check(_near(rules.gravity_strength, 20.0 * 0.55, 0.01), "low gravity scales gravity strength")
+	_check(_near(rules.ball_radius_scale, 1.55, 0.01), "big ball scales radius")
+	_check(_near(rules.gravity_interval, 15.0, 0.01), "fast shift shortens interval")
+	_check(_near(rules.gravity_warning, 3.0, 0.01), "fast shift shortens warning")
+	var conflicting := MutatorLibrary.build(["no_boost", "unlimited_boost"])
+	var valid := MutatorLibrary.validate(conflicting)
+	_check(valid.size() == 1, "no-boost and unlimited-boost conflict", "size=%d" % valid.size())
+	_check(MutatorLibrary.catalog().size() >= 6, "catalog lists six mutators")
+	rules.mutators = MutatorLibrary.build(["random_shift"])
+	var match_scene := MATCH_SCENE.instantiate() as MatchController
+	match_scene.auto_start = false
+	match_scene.headless_mode = true
+	match_scene.spawn_hud = false
+	match_scene.spawn_camera = false
+	match_scene.rules = rules
+	_track(match_scene)
+	add_child(match_scene)
+	await _frames(2)
+	match_scene.start_match()
+	_check(match_scene.rules.random_gravity, "match applies mutator at kickoff")
+	_check(match_scene.rules.mutators.size() == 1, "working rules carry the mutator")
+	await _cleanup()
+
+
+func _test_free_play_spawn() -> void:
+	_begin("Free play mode")
+	var rules := RULES.duplicate() as MatchRules
+	rules.free_play = true
+	rules.team_size = 1
+	rules.fill_with_bots = false
+	rules.match_duration = 3600.0
+	rules.overtime_enabled = false
+	var scene := MATCH_SCENE.instantiate() as MatchController
+	scene.auto_start = false
+	scene.headless_mode = true
+	scene.spawn_hud = false
+	scene.spawn_camera = false
+	scene.all_bots = false
+	scene.rules = rules
+	_track(scene)
+	add_child(scene)
+	await _frames(3)
+	_check(scene.cars.size() == 1, "free play spawns only the local car", "cars=%d" % scene.cars.size())
+	_check(scene.local_car != null, "free play assigns a local car")
+	_check(scene.local_car.team == 1, "local car is on blue")
+	await _cleanup()
 
 
 func _test_match_timer_and_overtime() -> void:

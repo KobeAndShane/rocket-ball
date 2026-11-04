@@ -54,6 +54,7 @@ var _is_local_visual: bool = false
 var _external_pending: bool = false
 var _network_tick: int = 0
 var _state_packets: Array[Dictionary] = []
+var _stuck_timer: float = 0.0
 
 
 func _ready() -> void:
@@ -197,6 +198,7 @@ func _physics_process(delta: float) -> void:
 	if control_mode == DriveMode.HUMAN and _is_local_visual:
 		_gather_human_input()
 	_demolish_cooldown = maxf(0.0, _demolish_cooldown - delta)
+	_check_unstuck(delta)
 	if _external_pending:
 		_external_pending = false
 
@@ -225,6 +227,25 @@ func _gather_human_input() -> void:
 
 func input_enabled() -> bool:
 	return state != State.DEMOLISHED and not frozen
+
+
+## Late-match safety: a car pinned in a corner or wedged on a wall for too long
+## is returned to its spawn point instead of blocking play. Reset is deliberate
+## and announced, never a silent teleport during normal driving.
+func _check_unstuck(delta: float) -> void:
+	if _stuck_timer < 0.0:
+		_stuck_timer = minf(0.0, _stuck_timer + delta)
+		return
+	if tuning == null or tuning.unstuck_time <= 0.0:
+		return
+	if state == State.GROUNDED and speed < 1.2:
+		_stuck_timer += delta
+		if _stuck_timer >= tuning.unstuck_time:
+			_stuck_timer = -3.0
+			Events.notification.emit("%s was unstuck" % display_name)
+			respawn(spawn_transform)
+	else:
+		_stuck_timer = 0.0
 
 
 ## Used by bots and network clients. The edge flag is consumed by the next tick.

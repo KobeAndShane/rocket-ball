@@ -4,6 +4,7 @@ extends Resource
 
 @export_group("Match")
 @export var mode_name: String = "Standard"
+@export var mode_id: String = "standard"
 @export var team_size: int = 3
 @export var match_duration: float = 300.0
 @export var score_limit: int = 0
@@ -16,6 +17,9 @@ extends Resource
 @export var bot_tier: int = 1
 @export var friendly_fire: bool = false
 @export var demolition_enabled: bool = true
+@export var free_play: bool = false
+@export var unstuck_time: float = 5.0
+@export var arena_theme_index: int = 0
 
 @export_group("Gravity")
 @export var gravity_interval: float = 30.0

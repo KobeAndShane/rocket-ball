@@ -1,0 +1,19 @@
+[gd_resource type="Resource" script_class="ArenaTheme" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://arena/ArenaTheme.gd" id="1_theme"]
+
+[resource]
+script = ExtResource("1_theme")
+display_name = "Solar Lava"
+floor_color = Color(0.16, 0.07, 0.05, 1)
+wall_color = Color(0.2, 0.09, 0.06, 1)
+trim_color = Color(1, 0.5, 0.12, 1)
+accent_color = Color(1, 0.24, 0.08, 1)
+net_color = Color(1, 0.6, 0.2, 0.48)
+sky_top = Color(0.09, 0.02, 0.01, 1)
+sky_bottom = Color(0.3, 0.1, 0.04, 1)
+ambient_color = Color(0.7, 0.42, 0.28, 1)
+ambient_energy = 0.65
+sun_energy = 1.5
+fog_enabled = true
+fog_density = 0.005

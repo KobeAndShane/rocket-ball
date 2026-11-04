@@ -52,6 +52,46 @@ func configure(new_rules: MatchRules, new_theme: ArenaTheme = null) -> void:
 		theme = new_theme
 
 
+## Swap the visual theme at kickoff without rebuilding collision.
+func apply_theme(new_theme: ArenaTheme) -> void:
+	if new_theme == null:
+		return
+	theme = new_theme
+	if _floor_mat == null:
+		return
+	_floor_mat.albedo_color = theme.floor_color
+	_floor_mat.emission = theme.trim_color * 0.035
+	_wall_mat.albedo_color = theme.wall_color
+	_trim_mat.albedo_color = theme.trim_color
+	_trim_mat.emission = theme.trim_color
+	for node: Node in get_children():
+		if node is WorldEnvironment:
+			var env := (node as WorldEnvironment).environment
+			if env != null and env.sky != null and env.sky.sky_material is ProceduralSkyMaterial:
+				var sky_mat := env.sky.sky_material as ProceduralSkyMaterial
+				sky_mat.sky_top_color = theme.sky_top
+				sky_mat.sky_horizon_color = theme.sky_bottom
+				sky_mat.ground_bottom_color = theme.sky_top
+				sky_mat.ground_horizon_color = theme.sky_bottom
+			if env != null:
+				env.ambient_light_color = theme.ambient_color
+				env.ambient_light_energy = theme.ambient_energy
+				env.fog_light_color = theme.sky_bottom
+				env.fog_enabled = theme.fog_enabled
+				env.fog_density = theme.fog_density
+		elif node is DirectionalLight3D:
+			(node as DirectionalLight3D).light_energy = theme.sun_energy
+		elif node is OmniLight3D:
+			(node as OmniLight3D).light_color = theme.trim_color
+	for goal: Goal in goals:
+		if goal != null:
+			goal.apply_theme(theme)
+
+
+func theme_names() -> Array[String]:
+	return ["Neon Grid", "Cryo Ice", "Solar Lava"]
+
+
 func _build_materials() -> void:
 	_floor_mat = StandardMaterial3D.new()
 	_floor_mat.albedo_color = theme.floor_color
