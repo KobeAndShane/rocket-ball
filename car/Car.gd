@@ -55,6 +55,8 @@ var _external_pending: bool = false
 var _network_tick: int = 0
 var _state_packets: Array[Dictionary] = []
 var _stuck_timer: float = 0.0
+var _wheel_query: PhysicsRayQueryParameters3D
+var _wheel_exclude: Array[RID] = []
 
 # Cosmetic loadout. Presentation only: the collider and tuning never change.
 var cosmetic_body_id: String = "body_stock"
@@ -102,6 +104,13 @@ func _ready() -> void:
 	collision_layer = CAR_LAYER
 	collision_mask = CAR_MASK
 	_resize_collider()
+	# Reused every physics tick: no per-step query allocations on the hot path.
+	_wheel_query = PhysicsRayQueryParameters3D.new()
+	_wheel_query.collision_mask = ARENA_LAYER
+	_wheel_query.collide_with_bodies = true
+	_wheel_query.collide_with_areas = false
+	_wheel_exclude.append(get_rid())
+	_wheel_query.exclude = _wheel_exclude
 	boost_component = get_node_or_null("BoostComponent") as BoostComponent
 	if boost_component != null:
 		boost_component.set_tuning(tuning)
@@ -615,12 +624,12 @@ func _integrate_forces(ps: PhysicsDirectBodyState3D) -> void:
 	var hits: int = 0
 	var normal_sum := Vector3.ZERO
 	var contact_acc := Vector3.ZERO
-	var contact_points: Array[Vector3] = []
 	for off: Vector3 in tuning.wheel_offsets:
 		var mount_world: Vector3 = ps.transform * off
 		var to: Vector3 = mount_world + ray_down * ray_len
-		var query := PhysicsRayQueryParameters3D.create(mount_world, to, ARENA_LAYER, [get_rid()])
-		var hit := space.intersect_ray(query)
+		_wheel_query.from = mount_world
+		_wheel_query.to = to
+		var hit := space.intersect_ray(_wheel_query)
 		if hit.is_empty():
 			continue
 		var normal: Vector3 = hit["normal"]
@@ -632,7 +641,6 @@ func _integrate_forces(ps: PhysicsDirectBodyState3D) -> void:
 		hits += 1
 		normal_sum += normal
 		contact_acc += point
-		contact_points.append(point)
 		var point_vel: Vector3 = ps.linear_velocity + ps.angular_velocity.cross(point - ps.transform.origin)
 		var along: float = point_vel.dot(normal)
 		var spring_force: float = tuning.suspension_stiffness * maxf(0.0, compression) - tuning.suspension_damping * along

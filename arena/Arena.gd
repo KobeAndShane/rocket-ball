@@ -29,6 +29,12 @@ var _floor_mat: StandardMaterial3D
 var _wall_mat: StandardMaterial3D
 var _trim_mat: StandardMaterial3D
 var _pad_layout: Array[Dictionary] = []
+var _pad_multimeshes: Dictionary = {}
+var _pad_materials: Dictionary = {}
+var _pad_indices: Dictionary = {}
+var _pad_transforms: Dictionary = {}
+var _pad_hidden: Dictionary = {}
+var _pad_pulse: float = 0.0
 
 
 func _ready() -> void:
@@ -299,6 +305,8 @@ func _build_pads() -> void:
 	_pad_root.name = "BoostPads"
 	add_child(_pad_root)
 	_pad_layout = _make_pad_layout()
+	var large_transforms: Array[Transform3D] = []
+	var small_transforms: Array[Transform3D] = []
 	var id := 0
 	for entry: Dictionary in _pad_layout:
 		var pad := PAD_SCENE.instantiate() as BoostPad
@@ -308,9 +316,97 @@ func _build_pads() -> void:
 		pad.respawn_time = rules.large_pad_respawn if pad.large else rules.small_pad_respawn
 		pad.surface_normal = entry["normal"]
 		pad.transform = Transform3D(_basis_from_up(entry["normal"]), entry["pos"])
+		pad.set_meta("shared_visual", true)
 		_pad_root.add_child(pad)
 		pads.append(pad)
+		var index: int = large_transforms.size() if pad.large else small_transforms.size()
+		if pad.large:
+			large_transforms.append(pad.transform)
+		else:
+			small_transforms.append(pad.transform)
+		_pad_indices[id] = {"large": pad.large, "index": index}
+		_pad_transforms[id] = pad.transform
+		pad.collected.connect(_on_pad_collected)
+		pad.respawned.connect(_on_pad_respawned)
 		id += 1
+	_build_pad_multimesh("large", large_transforms)
+	_build_pad_multimesh("small", small_transforms)
+
+
+## Pads are visual-only meshes over Area3D pickups. Two MultiMesh instances
+## replace 34 draw calls and 34 per-pad scripts while keeping collision exact.
+func _build_pad_multimesh(kind: String, transforms: Array[Transform3D]) -> void:
+	if transforms.is_empty():
+		return
+	var large: bool = kind == "large"
+	var mesh := CylinderMesh.new()
+	mesh.top_radius = 1.8 if large else 1.1
+	mesh.bottom_radius = mesh.top_radius
+	mesh.height = 0.22
+	mesh.radial_segments = 20 if large else 12
+	mesh.rings = 1
+	var material := StandardMaterial3D.new()
+	var color := Color(1.0, 0.62, 0.1) if large else Color(0.1, 0.85, 1.0)
+	material.albedo_color = color
+	material.emission_enabled = true
+	material.emission = color
+	material.emission_energy_multiplier = 2.0 if large else 1.2
+	material.metallic = 0.2
+	material.roughness = 0.4
+	var multimesh := MultiMesh.new()
+	multimesh.transform_format = MultiMesh.TRANSFORM_3D
+	multimesh.mesh = mesh
+	multimesh.instance_count = transforms.size()
+	for i in transforms.size():
+		multimesh.set_instance_transform(i, transforms[i])
+	var view := MultiMeshInstance3D.new()
+	view.name = "PadMultiMesh%s" % kind.capitalize()
+	view.multimesh = multimesh
+	view.material_override = material
+	view.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	view.custom_aabb = AABB(-HALF_EXTENTS - Vector3.ONE * 3.0, HALF_EXTENTS * 2.0 + Vector3.ONE * 6.0)
+	add_child(view)
+	_pad_multimeshes[kind] = view
+	_pad_materials[kind] = material
+
+
+func _process(delta: float) -> void:
+	if _pad_materials.is_empty():
+		return
+	_pad_pulse += delta
+	for kind: String in _pad_materials.keys():
+		var material := _pad_materials[kind] as StandardMaterial3D
+		if material != null:
+			var base: float = 2.0 if kind == "large" else 1.2
+			material.emission_energy_multiplier = base + sin(_pad_pulse * (3.0 if kind == "large" else 2.0)) * 0.35
+
+
+func _on_pad_collected(pad_id: int, _car_id: int) -> void:
+	_hide_shared_pad(pad_id, true)
+
+
+func _on_pad_respawned(pad_id: int) -> void:
+	_hide_shared_pad(pad_id, false)
+
+
+func _hide_shared_pad(pad_id: int, hidden: bool) -> void:
+	var entry: Dictionary = _pad_indices.get(pad_id, {})
+	if entry.is_empty():
+		return
+	_pad_hidden[pad_id] = hidden
+	var kind: String = "large" if bool(entry["large"]) else "small"
+	var view := _pad_multimeshes.get(kind) as MultiMeshInstance3D
+	if view == null or view.multimesh == null:
+		return
+	var index: int = int(entry["index"])
+	var transform: Transform3D = _pad_transforms[pad_id]
+	if hidden:
+		transform.basis = transform.basis.scaled(Vector3.ONE * 0.001)
+	view.multimesh.set_instance_transform(index, transform)
+
+
+func is_pad_hidden(pad_id: int) -> bool:
+	return bool(_pad_hidden.get(pad_id, false))
 
 
 ## 6 large + 28 small, mirror symmetric across X and Z (goal axis).

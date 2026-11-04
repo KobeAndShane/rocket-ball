@@ -1,0 +1,291 @@
+{
+  "cpu_ms_per_physics_step": {
+    "avg": 0.891530694444446,
+    "max": 11.47,
+    "p50": 0.693,
+    "p95": 1.937,
+    "p99": 3.451
+  },
+  "engine": {
+    "godot": "4.4.1-stable (official)",
+    "headless": true,
+    "physics_engine": "Jolt Physics",
+    "renderer": "forward_plus"
+  },
+  "fps": {
+    "avg": 1043.34944444444,
+    "max": 1335.0,
+    "p50": 1136.0,
+    "p95": 1335.0,
+    "p99": 1335.0
+  },
+  "frame_time_ms": {
+    "avg": 0.891530694444446,
+    "max": 11.47,
+    "p50": 0.693,
+    "p95": 1.937,
+    "p99": 3.451
+  },
+  "measurement": {
+    "mode": "fixed-step",
+    "note": "cpu_ms_per_physics_step is wall-clock CPU per simulated 120 Hz tick. Fixed-step mode runs exactly one tick per frame; real-time mode includes idle/wait time and is an upper bound."
+  },
+  "memory_mb": 64.9006633758545,
+  "network": {
+    "input_kbps_per_client": 8.203125,
+    "input_payload_bytes": 34,
+    "input_wire_bytes": 70,
+    "server_egress_kbps_6_clients": 73.828125,
+    "snapshot_kbps_per_client": 12.3046875,
+    "snapshot_payload_bytes": 174,
+    "snapshot_wire_bytes": 210,
+    "total_kbps_per_client": 20.5078125
+  },
+  "objects": {
+    "areas": 36,
+    "audio_players": 10,
+    "audio_players_3d": 14,
+    "collision_layers": {
+      "0": 1,
+      "2": 5,
+      "4": 1
+    },
+    "collision_shapes": 85,
+    "concave_shapes": 0,
+    "cpu_particles": 12,
+    "gpu_particles": 17,
+    "labels_3d": 6,
+    "lights": 11,
+    "mesh_instances": 177,
+    "multimesh_instances": 2,
+    "rigid_bodies": 7,
+    "static_bodies": 1,
+    "tree_nodes": 427
+  },
+  "physics_rate_hz": 1121.66567352518,
+  "physics_steps_per_frame": {
+    "avg": 1.0,
+    "max": 1.0,
+    "p50": 1.0,
+    "p95": 1.0,
+    "p99": 1.0
+  },
+  "physics_time_ms": {
+    "avg": 6.15617583333349,
+    "max": 9.794,
+    "p50": 5.422,
+    "p95": 9.794,
+    "p99": 9.794
+  },
+  "process_time_ms": {
+    "avg": 2.53615986111112,
+    "max": 5.174,
+    "p50": 1.662,
+    "p95": 5.174,
+    "p99": 5.174
+  },
+  "render": {
+    "draw_calls": 0,
+    "objects": 0,
+    "primitives": 0
+  },
+  "sample": {
+    "cars": 6,
+    "fixed_fps": 0,
+    "fixed_step": true,
+    "fps_cap": 0,
+    "frames": 7200,
+    "frames_over_4ms": 50,
+    "frames_over_833ms": 4,
+    "gravity_shift_samples": [
+      3000,
+      6842
+    ],
+    "load_to_playing_ms": 926.321,
+    "physics_frames": 7200,
+    "physics_steps_per_rendered_frame": 1.0,
+    "render_mode": false,
+    "simulated_seconds": 60.0,
+    "slow_frames": [
+      {
+        "index": 1093,
+        "ms": 4.366,
+        "phase": 0,
+        "state": "PLAYING",
+        "transitioning": false
+      },
+      {
+        "index": 2523,
+        "ms": 5.762,
+        "phase": 0,
+        "state": "PLAYING",
+        "transitioning": false
+      },
+      {
+        "index": 2557,
+        "ms": 4.031,
+        "phase": 0,
+        "state": "PLAYING",
+        "transitioning": false
+      },
+      {
+        "index": 3288,
+        "ms": 4.976,
+        "phase": 1,
+        "state": "PLAYING",
+        "transitioning": false
+      },
+      {
+        "index": 3902,
+        "ms": 5.296,
+        "phase": 1,
+        "state": "PLAYING",
+        "transitioning": false
+      },
+      {
+        "index": 3915,
+        "ms": 4.541,
+        "phase": 1,
+        "state": "PLAYING",
+        "transitioning": false
+      },
+      {
+        "index": 3944,
+        "ms": 4.56,
+        "phase": 1,
+        "state": "PLAYING",
+        "transitioning": false
+      },
+      {
+        "index": 3952,
+        "ms": 5.998,
+        "phase": 1,
+        "state": "PLAYING",
+        "transitioning": false
+      },
+      {
+        "index": 3957,
+        "ms": 4.487,
+        "phase": 1,
+        "state": "PLAYING",
+        "transitioning": false
+      },
+      {
+        "index": 3963,
+        "ms": 5.331,
+        "phase": 1,
+        "state": "PLAYING",
+        "transitioning": false
+      },
+      {
+        "index": 3970,
+        "ms": 5.072,
+        "phase": 1,
+        "state": "PLAYING",
+        "transitioning": false
+      },
+      {
+        "index": 4007,
+        "ms": 6.173,
+        "phase": 1,
+        "state": "PLAYING",
+        "transitioning": false
+      },
+      {
+        "index": 4008,
+        "ms": 5.453,
+        "phase": 1,
+        "state": "PLAYING",
+        "transitioning": false
+      },
+      {
+        "index": 4011,
+        "ms": 8.7,
+        "phase": 1,
+        "state": "PLAYING",
+        "transitioning": false
+      },
+      {
+        "index": 4014,
+        "ms": 5.663,
+        "phase": 1,
+        "state": "PLAYING",
+        "transitioning": false
+      },
+      {
+        "index": 4015,
+        "ms": 5.327,
+        "phase": 1,
+        "state": "PLAYING",
+        "transitioning": false
+      },
+      {
+        "index": 4019,
+        "ms": 4.086,
+        "phase": 1,
+        "state": "PLAYING",
+        "transitioning": false
+      },
+      {
+        "index": 4164,
+        "ms": 4.503,
+        "phase": 1,
+        "state": "PLAYING",
+        "transitioning": false
+      },
+      {
+        "index": 4166,
+        "ms": 4.798,
+        "phase": 1,
+        "state": "PLAYING",
+        "transitioning": false
+      },
+      {
+        "index": 4168,
+        "ms": 4.049,
+        "phase": 1,
+        "state": "PLAYING",
+        "transitioning": false
+      },
+      {
+        "index": 4180,
+        "ms": 4.778,
+        "phase": 1,
+        "state": "PLAYING",
+        "transitioning": false
+      },
+      {
+        "index": 4185,
+        "ms": 7.19,
+        "phase": 1,
+        "state": "PLAYING",
+        "transitioning": false
+      },
+      {
+        "index": 4186,
+        "ms": 4.219,
+        "phase": 1,
+        "state": "PLAYING",
+        "transitioning": false
+      },
+      {
+        "index": 4187,
+        "ms": 7.994,
+        "phase": 1,
+        "state": "PLAYING",
+        "transitioning": false
+      }
+    ],
+    "state": "PLAYING",
+    "wall_seconds": 6.419025,
+    "warmup_frames": 600,
+    "worst_step_index": 4950,
+    "worst_step_ms": 11.47
+  },
+  "settings": {
+    "occlusion_culling": true,
+    "physics_interpolation": true,
+    "physics_steps_per_frame": 16,
+    "physics_ticks_per_second": 120
+  }
+}

@@ -41,6 +41,12 @@ func _ready() -> void:
 	_material.roughness = 0.4
 	if _mesh != null:
 		_mesh.material_override = _material
+	# Arena renders all pads through two MultiMesh instances. Standalone pads
+	# (tests, editor) keep their own mesh.
+	if bool(get_meta("shared_visual", false)):
+		if _mesh != null:
+			_mesh.visible = false
+		set_process(false)
 
 
 func _apply_size() -> void:
@@ -87,7 +93,8 @@ func collect(car: Car) -> void:
 	active = false
 	_timer = respawn_time
 	visible = false
-	monitoring = false
+	# Area3D forbids direct monitoring changes inside its own signal callback.
+	set_deferred("monitoring", false)
 	if _shape != null:
 		_shape.set_deferred("disabled", true)
 	Events.pad_collected.emit(pad_id, car.car_id)
@@ -98,7 +105,7 @@ func _respawn() -> void:
 	active = true
 	_timer = 0.0
 	visible = true
-	monitoring = true
+	set_deferred("monitoring", true)
 	if _shape != null:
 		_shape.set_deferred("disabled", false)
 	Events.pad_respawned.emit(pad_id)
@@ -109,6 +116,6 @@ func reset() -> void:
 	active = true
 	_timer = 0.0
 	visible = true
-	monitoring = true
+	set_deferred("monitoring", true)
 	if _shape != null:
 		_shape.set_deferred("disabled", false)

@@ -197,7 +197,8 @@ func _build_center() -> void:
 	center_label.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	center_label.offset_top = -90.0
 	center_label.modulate.a = 0.0
-	center_label.outline_size = 14
+	center_label.add_theme_constant_override("outline_size", 14)
+	center_label.add_theme_color_override("font_outline_color", Color(0.02, 0.03, 0.06, 0.95))
 	root.add_child(center_label)
 
 

@@ -39,6 +39,7 @@ func _run_all() -> void:
 	await _test_ball_speed_clamp()
 	await _test_goal_fires_once()
 	await _test_pad_symmetry()
+	await _test_performance_settings()
 	await _test_rules_defaults()
 	await _test_mutators()
 	await _test_free_play_spawn()
@@ -275,6 +276,42 @@ func _test_pad_symmetry() -> void:
 		_check(absf(n.length() - 1.0) < 0.01, "pad normal normalised")
 		break
 	arena.free()
+
+	# Pads are rendered by two MultiMesh instances; the Area3D pickups remain.
+	var arena_scene := load("res://arena/Arena.tscn") as PackedScene
+	var full := _track(arena_scene.instantiate() as Arena) as Arena
+	add_child(full)
+	await get_tree().process_frame
+	var large_view := full.get_node_or_null("PadMultiMeshLarge") as MultiMeshInstance3D
+	var small_view := full.get_node_or_null("PadMultiMeshSmall") as MultiMeshInstance3D
+	_check(large_view != null and large_view.multimesh != null and large_view.multimesh.instance_count == 6, "large pads render in one MultiMesh")
+	_check(small_view != null and small_view.multimesh != null and small_view.multimesh.instance_count >= 24, "small pads render in one MultiMesh")
+	if full.pads.size() > 0:
+		var pad_mesh := full.pads[0].get_node_or_null("PadMesh") as MeshInstance3D
+		_check(pad_mesh != null and not pad_mesh.visible, "per-pad mesh is retired when shared rendering is active")
+		_check(not full.pads[0].is_processing(), "shared pads skip per-frame pulse scripts")
+	_check(full._pad_indices.has(0), "shared pad instance map is populated")
+	if large_view != null and large_view.multimesh != null:
+		_check(not full.is_pad_hidden(0), "shared pad starts visible")
+		full._on_pad_collected(0, -1)
+		await _frames(1)
+		_check(full.is_pad_hidden(0), "collected pad hides its shared instance")
+		full._on_pad_respawned(0)
+		await _frames(1)
+		_check(not full.is_pad_hidden(0), "respawned pad restores its shared instance")
+	await _cleanup()
+
+
+func _test_performance_settings() -> void:
+	_begin("Performance settings and budgets")
+	_check(int(ProjectSettings.get_setting("physics/common/physics_ticks_per_second", 0)) == 120, "physics ticks at 120 Hz")
+	_check(bool(ProjectSettings.get_setting("physics/common/physics_interpolation", false)), "physics interpolation is enabled")
+	_check(str(ProjectSettings.get_setting("physics/3d/physics_engine", "")) == "Jolt Physics", "Jolt physics is configured")
+	_check(str(ProjectSettings.get_setting("rendering/renderer/rendering_method", "")) == "forward_plus", "Forward+ renderer is configured")
+	_check(bool(ProjectSettings.get_setting("rendering/occlusion_culling/use_occlusion_culling", false)), "occlusion culling is enabled")
+	_check(int(ProjectSettings.get_setting("physics/common/max_physics_steps_per_frame", 0)) >= 8, "physics has catch-up headroom")
+	_check(ResourceLoader.exists("res://tools/PerfHarness.tscn"), "headless performance harness is available")
+	await _cleanup()
 
 
 # --- 04 gravity --------------------------------------------------------------
@@ -1043,6 +1080,19 @@ func _test_network_simulation() -> void:
 	_check(NetManager.should_drop_packet(), "100% loss drops packets")
 	NetManager.set_simulated_network(0, 0.0)
 	_check(not NetManager.should_drop_packet(), "zero loss delivers packets")
+	NetManager.set_simulated_network(150, 0.05, 30)
+	_check(NetManager.get_ping_ms() == 150, "stress profile reports 150 ms ping")
+	_check(_near(NetManager.get_packet_loss(), 0.05, 0.001), "stress profile reports 5% loss")
+	_check(_near(NetManager.jitter_seconds(), 0.03, 0.001), "stress profile reports 30 ms jitter")
+	NetManager._pending_out.clear()
+	var before_dispatch := Time.get_ticks_msec()
+	NetManager._dispatch("_rpc_lobby", [{}])
+	_check(NetManager._pending_out.size() == 1, "jittered packet is queued")
+	if NetManager._pending_out.size() == 1:
+		var delay: int = int(NetManager._pending_out[0]["due"]) - before_dispatch
+		_check(delay >= 115 and delay <= 185, "jitter keeps delay inside 150 +/- 30 ms", "delay=%d" % delay)
+	NetManager._pending_out.clear()
+	NetManager.set_simulated_network(0, 0.0, 0)
 	var before := NetManager.server_tick
 	NetManager._physics_process(1.0 / 120.0)
 	NetManager._physics_process(1.0 / 120.0)

@@ -36,6 +36,7 @@ var current_match_rules: Dictionary = {}
 var peer: ENetMultiplayerPeer = null
 var simulated_latency_ms: int = 0
 var simulated_loss: float = 0.0
+var simulated_jitter_ms: int = 0
 
 var _local_tick: int = 0
 var _tick_offset: float = 0.0
@@ -67,9 +68,12 @@ func _on_settings_changed(key: String, _value: Variant) -> void:
 		simulated_latency_ms = Settings.get_int("net/test_latency")
 	if key == "net/test_loss" or key == "*":
 		simulated_loss = clampf(Settings.get_float("net/test_loss") / 100.0, 0.0, 1.0)
+	if key == "net/test_jitter" or key == "*":
+		simulated_jitter_ms = maxi(Settings.get_int("net/test_jitter"), 0)
 	if key.begins_with("net/"):
 		simulated_latency_ms = clampi(Settings.get_int("net/test_latency"), 0, 1000)
 		simulated_loss = clampf(Settings.get_float("net/test_loss") / 100.0, 0.0, 1.0)
+		simulated_jitter_ms = clampi(Settings.get_int("net/test_jitter"), 0, 1000)
 
 
 func _physics_process(delta: float) -> void:
@@ -473,9 +477,12 @@ func _rpc_match_event(kind: String, payload: Dictionary) -> void:
 
 
 func _dispatch(method: String, args: Array) -> void:
-	if simulated_latency_ms > 0:
+	if simulated_latency_ms > 0 or simulated_jitter_ms > 0:
+		var delay: int = simulated_latency_ms
+		if simulated_jitter_ms > 0:
+			delay += int(round(_rng.randf_range(-float(simulated_jitter_ms), float(simulated_jitter_ms))))
 		_pending_out.append({
-			"due": Time.get_ticks_msec() + simulated_latency_ms,
+			"due": Time.get_ticks_msec() + maxi(delay, 0),
 			"method": method,
 			"args": args,
 		})
@@ -517,9 +524,10 @@ func _rpc_lobby(lobby: Dictionary) -> void:
 
 # --- Diagnostics -------------------------------------------------------------
 
-func set_simulated_network(latency_ms: int, loss: float) -> void:
+func set_simulated_network(latency_ms: int, loss: float, jitter_ms: int = 0) -> void:
 	simulated_latency_ms = clampi(latency_ms, 0, 1000)
 	simulated_loss = clampf(loss, 0.0, 1.0)
+	simulated_jitter_ms = clampi(jitter_ms, 0, 1000)
 
 
 func should_drop_packet() -> bool:
@@ -528,6 +536,10 @@ func should_drop_packet() -> bool:
 
 func latency_seconds() -> float:
 	return float(simulated_latency_ms) / 1000.0
+
+
+func jitter_seconds() -> float:
+	return float(simulated_jitter_ms) / 1000.0
 
 
 func get_ping_ms() -> int:

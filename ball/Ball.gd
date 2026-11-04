@@ -11,6 +11,7 @@ const BALL_MASK := ARENA_LAYER | CAR_LAYER | GOAL_LAYER
 @export var tuning: BallTuning
 
 var _hit_cooldowns: Dictionary = {}
+var _cooldown_ids: Array[int] = []
 var _last_hit_position := Vector3.ZERO
 var _last_hit_strength: float = 0.0
 var _time_since_hit: float = 999.0
@@ -130,8 +131,16 @@ func _build_trail() -> void:
 
 func _physics_process(delta: float) -> void:
 	_time_since_hit += delta
-	for key: Variant in _hit_cooldowns.keys():
-		_hit_cooldowns[key] = float(_hit_cooldowns[key]) - delta
+	var i: int = 0
+	while i < _cooldown_ids.size():
+		var key: int = _cooldown_ids[i]
+		var remaining: float = float(_hit_cooldowns.get(key, 0.0)) - delta
+		if remaining <= 0.0:
+			_hit_cooldowns.erase(key)
+			_cooldown_ids.remove_at(i)
+		else:
+			_hit_cooldowns[key] = remaining
+			i += 1
 	_update_trail()
 
 
@@ -173,6 +182,8 @@ func _handle_contacts(ps: PhysicsDirectBodyState3D) -> void:
 		var rel_speed: float = rel.length()
 		if rel_speed < tuning.min_hit_speed:
 			continue
+		if not _hit_cooldowns.has(key):
+			_cooldown_ids.append(key)
 		_hit_cooldowns[key] = tuning.hit_cooldown
 		var contact: Vector3 = ps.get_contact_collider_position(i)
 		var offset: Vector3 = contact - ps.transform.origin
@@ -199,6 +210,7 @@ func reset_to_kickoff(center: Vector3, height_offset: float = -1.0) -> void:
 	angular_velocity = Vector3.ZERO
 	sleeping = false
 	_hit_cooldowns.clear()
+	_cooldown_ids.clear()
 	last_hitter_id = -1
 	Events.ball_reset.emit()
 

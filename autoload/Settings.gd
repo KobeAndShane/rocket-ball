@@ -83,6 +83,7 @@ func _build_defaults() -> void:
 		"net/player_name": "Pilot",
 		"net/test_latency": 0,
 		"net/test_loss": 0.0,
+		"net/test_jitter": 0,
 	}
 	for i in BUSES.size():
 		_values["audio/%s" % BUSES[i].to_lower()] = _values.get("audio/%s" % BUSES[i].to_lower(), 0.9)

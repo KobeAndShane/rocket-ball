@@ -42,6 +42,7 @@ common/max_physics_steps_per_frame=16
 
 renderer/rendering_method="forward_plus"
 renderer/rendering_method.mobile="mobile"
+occlusion_culling/use_occlusion_culling=true
 textures/default_filters/use_nearest_mipmap_filter=false
 anti_aliasing/quality/msaa_3d=1
 environment/defaults/default_clear_color=Color(0.02, 0.03, 0.06, 1)

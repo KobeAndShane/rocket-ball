@@ -19,6 +19,7 @@ var _failed: bool = false
 func _ready() -> void:
 	var latency: int = 0
 	var loss: float = 0.0
+	var jitter: int = 0
 	var args: PackedStringArray = OS.get_cmdline_args()
 	args.append_array(OS.get_cmdline_user_args())
 	for arg: String in args:
@@ -26,8 +27,10 @@ func _ready() -> void:
 			latency = int(arg.get_slice("=", 1))
 		elif arg.begins_with("--smoke-loss="):
 			loss = float(arg.get_slice("=", 1))
-	if latency > 0 or loss > 0.0:
-		NetManager.set_simulated_network(latency, loss)
+		elif arg.begins_with("--smoke-jitter="):
+			jitter = int(arg.get_slice("=", 1))
+	if latency > 0 or loss > 0.0 or jitter > 0:
+		NetManager.set_simulated_network(latency, loss, jitter)
 	NetManager.snapshot_received.connect(_on_snapshot)
 	NetManager.match_started.connect(_on_match_started)
 	NetManager.connection_failed.connect(_on_connection_failed)
@@ -67,11 +70,12 @@ func _process(delta: float) -> void:
 		set_process(false)
 		var ok: bool = _started and snapshots > 20 and match_scene != null and match_scene.local_car != null
 		if ok:
-			print("NET SMOKE PASS  snapshots=%d  local_car=%d  state=%s  ping=%d" % [
+			print("NET SMOKE PASS  snapshots=%d  local_car=%d  state=%s  ping=%d  jitter=%d" % [
 				snapshots,
 				match_scene.local_car.car_id,
 				match_scene.get_state_name(),
 				NetManager.get_ping_ms(),
+				NetManager.simulated_jitter_ms,
 			])
 		else:
 			print("NET SMOKE FAIL  started=%s snapshots=%d local_car=%s" % [
