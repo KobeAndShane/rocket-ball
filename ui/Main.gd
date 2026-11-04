@@ -1280,7 +1280,11 @@ func _small_button(text: String, callback: Callable, width: float = 120.0) -> Bu
 	btn.text = text
 	btn.custom_minimum_size = Vector2(width, 34.0)
 	btn.add_theme_font_size_override("font_size", 13)
-	btn.pressed.connect(callback)
+	btn.pressed.connect(func() -> void:
+		Audio.play_ui("ui_click")
+		callback.call()
+	)
+	btn.mouse_entered.connect(func() -> void: Audio.play_ui("ui_hover", -10.0))
 	return btn
 
 
@@ -1292,7 +1296,11 @@ func _nav_button(text: String, callback: Callable) -> Button:
 	btn.add_theme_font_size_override("font_size", 17)
 	btn.add_theme_stylebox_override("normal", _style(Color(0.04, 0.07, 0.13, 0.85), Color(0.15, 0.55, 0.85, 0.35), 8))
 	btn.add_theme_stylebox_override("hover", _style(Color(0.07, 0.14, 0.22, 0.95), Color(0.15, 0.85, 1.0, 0.8), 8))
-	btn.pressed.connect(callback)
+	btn.pressed.connect(func() -> void:
+		Audio.play_ui("ui_click")
+		callback.call()
+	)
+	btn.mouse_entered.connect(func() -> void: Audio.play_ui("ui_hover", -10.0))
 	return btn
 
 

@@ -17,6 +17,7 @@ const BASE_RULES := preload("res://match/MatchRules.tres")
 const BASE_CAR_TUNING := preload("res://car/CarTuning.tres")
 const BASE_BALL_TUNING := preload("res://ball/BallTuning.tres")
 const VFX_SERVICE := preload("res://vfx/VFXService.gd")
+const MATCH_AUDIO_SCENE := preload("res://audio/MatchAudio.tscn")
 const ARENA_LAYER := 1
 
 static var selected_pack_id: String = "onboarding"
@@ -27,6 +28,7 @@ var car: Car
 var ball: Ball
 var camera: ChaseCamera
 var vfx: VFXService
+var audio: MatchAudio
 
 var pack: Dictionary = {}
 var drills: Array[DrillBase] = []
@@ -128,6 +130,10 @@ func _build_world() -> void:
 	vfx.name = "VFX"
 	vfx.setup(self, arena)
 	add_child(vfx)
+	audio = MATCH_AUDIO_SCENE.instantiate() as MatchAudio
+	audio.name = "Audio"
+	add_child(audio)
+	audio.setup(self)
 	if not headless_mode:
 		camera = CAMERA_SCENE.instantiate() as ChaseCamera
 		add_child(camera)

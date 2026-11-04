@@ -26,6 +26,8 @@ signal car_state_changed(car_id: int, state: int)
 signal car_demolished(victim_id: int, attacker_id: int)
 signal car_respawned(car_id: int)
 signal ball_hit(strength: float, position: Vector3, hitter_id: int)
+signal shot_taken(car_id: int)
+signal save_made(car_id: int)
 signal ball_reset
 signal pad_collected(pad_id: int, car_id: int)
 signal pad_respawned(pad_id: int)

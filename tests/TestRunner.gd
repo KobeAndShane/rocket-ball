@@ -68,6 +68,9 @@ func _run_all() -> void:
 	await _test_team_color_refresh()
 	await _test_vfx_pool_and_shift()
 	await _test_visual_polish()
+	await _test_audio_library()
+	await _test_audio_buses()
+	await _test_match_audio()
 	await _test_car_settles_on_floor()
 	await _test_snapshot_codec()
 	await _test_input_redundancy()
@@ -1611,6 +1614,139 @@ func _test_visual_polish() -> void:
 	await _cleanup()
 
 
+func _test_audio_library() -> void:
+	_begin("Audio library synthesis and mix mapping")
+	_check(AudioLibrary.IDS.size() >= 20, "audio library covers engine, hits, cues, music and UI voices", "ids=%d" % AudioLibrary.IDS.size())
+	_check(AudioLibrary.ANNOUNCER_FILES.size() >= 6, "announcer line files are mapped")
+	var light := AudioLibrary.get_stream("ball_light") as AudioStreamWAV
+	var medium := AudioLibrary.get_stream("ball_medium") as AudioStreamWAV
+	var heavy := AudioLibrary.get_stream("ball_heavy") as AudioStreamWAV
+	_check(light != null and light.data.size() > 44, "light impact stream is generated")
+	_check(medium != null and medium.data.size() > 44, "medium impact stream is generated")
+	_check(heavy != null and heavy.data.size() > 44, "heavy impact stream is generated")
+	_check(AudioLibrary.get_stream("ball_light") == light, "generated streams are cached")
+	var loop := AudioLibrary.get_stream("music_calm") as AudioStreamWAV
+	_check(loop != null and loop.loop_mode == AudioStreamWAV.LOOP_FORWARD, "music loops seamlessly")
+	_check(AudioLibrary.announcer_line_for("goal") == "GOAL!", "announcer subtitles are wired")
+	_check(AudioLibrary.announcer_line_for("gravity_shift") == "Gravity shift!", "gravity shift has an announcer line")
+	var announcer := AudioLibrary.get_stream("announcer_goal") as AudioStreamWAV
+	_check(announcer != null and announcer.data.size() > 44, "announcer line stream is available")
+
+	_check(MatchAudio.tier_for_strength(3.0) == "ball_light", "weak hits use the light tier")
+	_check(MatchAudio.tier_for_strength(12.0) == "ball_medium", "medium hits use the medium tier")
+	_check(MatchAudio.tier_for_strength(30.0) == "ball_heavy", "strong hits use the heavy tier")
+	var idle_pitch := MatchAudio.engine_pitch(0.0, false)
+	var fast_pitch := MatchAudio.engine_pitch(1.0, true)
+	_check(fast_pitch > idle_pitch and fast_pitch <= 2.1, "engine pitch rises with speed and boost")
+	_check(MatchAudio.engine_volume_db(1.0, true) > MatchAudio.engine_volume_db(0.0, false), "engine volume rises with speed")
+	_check(MatchAudio.music_state_for(2, false, 300.0, 2, 1) == "calm", "early play uses calm music")
+	_check(MatchAudio.music_state_for(2, false, 30.0, 2, 1) == "tense", "close endgame uses tense music")
+	_check(MatchAudio.music_state_for(5, true, 300.0, 2, 2) == "overtime", "overtime uses the overtime track")
+	await _cleanup()
+
+
+func _test_audio_buses() -> void:
+	_begin("Audio buses, limiting and ducking")
+	for bus_name: String in Settings.BUSES:
+		_check(AudioServer.get_bus_index(bus_name) >= 0, "%s bus exists" % bus_name)
+	var master := AudioServer.get_bus_index("Master")
+	var music := AudioServer.get_bus_index("Music")
+	var sfx := AudioServer.get_bus_index("SFX")
+	var announcer := AudioServer.get_bus_index("Announcer")
+	_check(Audio._has_effect(master, "AudioEffectLimiter"), "master bus has a limiter")
+	_check(Audio._has_effect(music, "AudioEffectCompressor"), "music bus is side-chain compressed")
+	var compressor: AudioEffectCompressor = null
+	for i in AudioServer.get_bus_effect_count(music):
+		var effect := AudioServer.get_bus_effect(music, i)
+		if effect is AudioEffectCompressor:
+			compressor = effect
+	_check(compressor != null and str(compressor.sidechain) == "Announcer", "announcer ducks the music bus")
+	_check(str(AudioServer.get_bus_send(music)) == "Master", "music routes through master")
+	_check(str(AudioServer.get_bus_send(sfx)) == "Master", "SFX routes through master")
+	_check(str(AudioServer.get_bus_send(announcer)) == "Master", "announcer routes through master")
+	_check(AudioServer.get_bus_volume_db(master) <= 0.1, "master stays at or below unity")
+	_check(AudioServer.get_bus_volume_db(music) <= 0.1, "music has headroom")
+	_check(AudioServer.get_bus_volume_db(sfx) <= 0.1, "SFX has headroom")
+	_check(Audio.ui_voice_count() >= 2, "UI sounds use a small pooled voice set")
+	await _cleanup()
+
+
+func _test_match_audio() -> void:
+	_begin("Match audio service")
+	var fake := _track(FakeMatch.new()) as FakeMatch
+	add_child(fake)
+	var car := _track(CAR_SCENE.instantiate() as Car) as Car
+	car.car_id = 7
+	car.team = 1
+	car.tuning = CAR_TUNING.duplicate() as CarTuning
+	add_child(car)
+	fake.cars.append(car)
+	var audio := _track(load("res://audio/MatchAudio.tscn").instantiate() as MatchAudio) as MatchAudio
+	add_child(audio)
+	audio.setup(fake)
+	await get_tree().process_frame
+
+	_check(audio.hit_voice_count() >= 3, "ball impact voices are pooled", "voices=%d" % audio.hit_voice_count())
+	_check(audio.announcer_voice_count() >= 2, "announcer voices are pooled")
+	_check(audio.engine_voice_count() == 1, "one looping 3D engine voice per car")
+	var hit_probe := audio.get_node_or_null("BallHit0") as AudioStreamPlayer3D
+	_check(hit_probe != null and hit_probe.attenuation_model == AudioStreamPlayer3D.ATTENUATION_INVERSE_DISTANCE, "impacts use inverse-distance attenuation")
+	_check(hit_probe != null and hit_probe.max_distance >= 40.0, "impacts carry across the arena")
+	_check(hit_probe != null and hit_probe.doppler_tracking == AudioStreamPlayer3D.DOPPLER_TRACKING_PHYSICS_STEP, "impacts use physics-step Doppler")
+	var engine := audio.engine_player(7)
+	_check(engine != null and engine.playing, "engine loop starts")
+	_check(engine != null and engine.max_polyphony == 1, "engine voices are limited")
+	_check(engine != null and engine.doppler_tracking == AudioStreamPlayer3D.DOPPLER_TRACKING_PHYSICS_STEP, "engine uses physics-step Doppler")
+	var idle_pitch: float = engine.pitch_scale if engine != null else 0.0
+	var idle_volume: float = engine.volume_db if engine != null else -80.0
+	car.speed = 30.0
+	car.input.boost = true
+	if car.boost_component != null:
+		car.boost_component.set_amount(80.0)
+	audio.refresh_engine()
+	_check(engine != null and engine.pitch_scale > idle_pitch, "engine pitch follows speed and boost")
+	_check(engine != null and engine.volume_db > idle_volume, "engine volume follows speed and boost")
+
+	for state: String in MatchAudio.MUSIC_STATES:
+		var player := audio.music_player(state)
+		_check(player != null and player.playing, "%s music layer is looping" % state)
+		var stream: AudioStreamWAV = null
+		if player != null:
+			stream = player.stream as AudioStreamWAV
+		_check(stream != null and stream.loop_mode == AudioStreamWAV.LOOP_FORWARD, "%s music stream loops" % state)
+	_check(audio.active_music_state() == "calm", "new match starts on the calm layer")
+
+	Events.ball_hit.emit(4.0, Vector3.ZERO, 7)
+	_check(audio.last_hit_tier() == "ball_light", "weak impacts select light audio")
+	Events.ball_hit.emit(34.0, Vector3.ZERO, 7)
+	_check(audio.last_hit_tier() == "ball_heavy", "heavy impacts select heavy audio")
+
+	Events.gravity_shift_warning.emit(4.0, GravityManager.PHASE_CEILING)
+	_check(audio.is_shift_warning_playing(), "rising warning cue starts before a shift")
+	Events.gravity_shift_started.emit(GravityManager.PHASE_FLOOR, GravityManager.PHASE_CEILING, 2.0)
+	_check(not audio.is_shift_warning_playing() and audio.is_shift_whoosh_playing(), "whoosh replaces the warning at the flip")
+	_check(audio.last_announcer() == "announcer_gravity_shift", "gravity shift announcer fires")
+	Events.gravity_shift_finished.emit(2)
+	_check(not audio.is_shift_whoosh_playing(), "shift cues clear when the blend finishes")
+
+	Events.goal_scored.emit(1, 7)
+	_check(audio.last_announcer() == "announcer_goal", "goal announcer fires")
+	Events.overtime_started.emit()
+	_check(audio.last_announcer() == "announcer_overtime", "overtime announcer fires")
+	Events.countdown_changed.emit(3)
+	_check(audio.last_announcer() == "countdown", "kickoff countdown callout fires")
+
+	fake.in_overtime = true
+	fake.state = 5
+	fake.time_left = 0.0
+	audio.setup(fake)
+	_check(audio.active_music_state() == "overtime", "music switches to overtime")
+	_check(audio.music_volume("overtime") > audio.music_volume("calm"), "overtime layer fades above calm")
+	await _frames(3)
+	_check(audio.crowd_volume_db() > -22.0, "crowd lifts during overtime")
+	await _cleanup()
+
+
 func _report() -> void:
 	print("\n=== Results ===")
 	print("Passed: %d" % _passes)
@@ -1618,3 +1754,13 @@ func _report() -> void:
 	for failure: String in _failures:
 		print("  - %s" % failure)
 	print("=== %s ===" % ("OK" if _failures.is_empty() else "FAILURES"))
+
+
+class FakeMatch:
+	extends Node3D
+	var cars: Array[Car] = []
+	var state: int = 2
+	var time_left: float = 300.0
+	var score1: int = 0
+	var score2: int = 0
+	var in_overtime: bool = false

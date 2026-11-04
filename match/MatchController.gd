@@ -724,11 +724,13 @@ func _on_ball_hit(strength: float, position: Vector3, hitter_id: int) -> void:
 		if dist < 38.0 and ball_vel.dot(to_goal) > 0.55 and _cooldown_ok(hitter_id, "shot"):
 			_goal_cooldown(hitter_id, "shot")
 			st["shots"] = int(st["shots"]) + 1
+			Events.shot_taken.emit(hitter_id)
 	if own_goal != null and strength > 10.0:
 		var own_dist: float = position.distance_to(own_goal.global_position)
 		if own_dist < 18.0 and _cooldown_ok(hitter_id, "save"):
 			_goal_cooldown(hitter_id, "save")
 			st["saves"] = int(st["saves"]) + 1
+			Events.save_made.emit(hitter_id)
 			Events.event_feed.emit("%s saves!" % car.display_name, Color(0.4, 1.0, 0.55))
 			_emit_stats()
 

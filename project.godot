@@ -18,6 +18,7 @@ GravityManager="*res://autoload/GravityManager.gd"
 NetManager="*res://autoload/NetManager.gd"
 Meta="*res://autoload/Meta.gd"
 A11y="*res://autoload/Accessibility.gd"
+Audio="*res://autoload/Audio.gd"
 Matchmaking="*res://matchmaking/MatchmakingService.gd"
 
 [display]
