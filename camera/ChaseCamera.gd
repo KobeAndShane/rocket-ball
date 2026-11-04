@@ -6,6 +6,8 @@ extends Camera3D
 const ARENA_LAYER := 1
 const WORLD_HORIZON := Vector3(0.0, 1.0, 0.0)
 
+enum ReplayMode { ORBIT, SIDELINE, BALL_CHASE }
+
 @export var target: Car
 @export var ball: Ball
 @export var distance: float = 7.2
@@ -13,10 +15,12 @@ const WORLD_HORIZON := Vector3(0.0, 1.0, 0.0)
 @export var angle_deg: float = -12.0
 @export var stiffness: float = 8.0
 @export var up_rate: float = 6.0
+@export var swivel_speed: float = 3.0
 
 var ball_cam_enabled: bool = true
 var free_camera: bool = false
 var spectator_target: Node3D = null
+var replay_mode: ReplayMode = ReplayMode.ORBIT
 
 var _smooth_up: Vector3 = Vector3.UP
 var _smooth_look: Vector3 = Vector3.ZERO
@@ -71,6 +75,7 @@ func _apply_settings() -> void:
 	height = Settings.get_float("camera/height")
 	angle_deg = Settings.get_float("camera/angle")
 	stiffness = Settings.get_float("camera/stiffness")
+	swivel_speed = Settings.get_float("camera/swivel_speed")
 	ball_cam_enabled = Settings.get_bool("camera/ball_cam")
 
 
@@ -112,7 +117,8 @@ func _process(delta: float) -> void:
 	forward = forward.normalized()
 	if _look_behind:
 		forward = -forward
-	var desired: Vector3 = car_pos + _smooth_up * height - forward * distance
+	var pitch_offset: float = tan(deg_to_rad(-angle_deg)) * distance
+	var desired: Vector3 = car_pos + _smooth_up * (height + pitch_offset) - forward * distance
 	desired = _avoid_geometry(car_pos + _smooth_up * 0.9, desired)
 	var damp: float = stiffness * (0.45 if _reduced_motion else 1.0)
 	var pos_k: float = 1.0 - exp(-damp * delta)
@@ -128,7 +134,9 @@ func _process(delta: float) -> void:
 		if _reduced_motion:
 			ball_blend *= 0.7
 		look_target = car_look.lerp(ball.global_position, ball_blend)
-	_smooth_look = _smooth_look.lerp(look_target, 1.0 - exp(-(stiffness + 4.0) * delta)) if _has_snapshot and _smooth_look != Vector3.ZERO else look_target
+	# Swivel speed controls how quickly the aim follows the ball horizontally.
+	var look_rate: float = (stiffness + 4.0) * maxf(swivel_speed, 0.1) * 0.35
+	_smooth_look = _smooth_look.lerp(look_target, 1.0 - exp(-look_rate * delta)) if _has_snapshot and _smooth_look != Vector3.ZERO else look_target
 	var up_vec: Vector3 = _smooth_up
 	var dir: Vector3 = (_smooth_look - _smooth_pos)
 	if dir.length_squared() < 0.01:
@@ -179,11 +187,24 @@ func _slerp_safe(from: Vector3, to: Vector3, t: float) -> Vector3:
 	return out.normalized() if out.length_squared() > 0.1 else b
 
 
-func start_replay(focus: Vector3, duration: float) -> void:
+func start_replay(focus: Vector3, duration: float, mode: int = -1) -> void:
 	_replay_active = true
 	_replay_time = 0.0
 	_replay_duration = maxf(duration, 0.5)
 	_replay_focus = focus
+	if mode >= 0:
+		replay_mode = mode as ReplayMode
+	# Cycle cameras between goals so consecutive replays feel different.
+	if mode < 0:
+		replay_mode = ((replay_mode + 1) % 3) as ReplayMode
+
+
+func replay_mode_name() -> String:
+	return ["ORBIT", "SIDELINE", "BALL CHASE"][replay_mode]
+
+
+func set_replay_mode(mode: int) -> void:
+	replay_mode = clampi(mode, 0, 2) as ReplayMode
 
 
 func stop_replay() -> void:
@@ -193,15 +214,32 @@ func stop_replay() -> void:
 
 func _update_replay(delta: float) -> void:
 	_replay_time += delta
-	var t: float = _replay_time * 0.55
 	var up: Vector3 = GravityManager.up
-	var right := Vector3(1.0, 0.0, 0.0)
-	if absf(up.dot(right)) > 0.9:
-		right = Vector3(0.0, 0.0, 1.0)
-	var fwd := up.cross(right).normalized()
-	var radius: float = 17.0 - minf(_replay_time * 1.2, 5.0)
-	var pos: Vector3 = _replay_focus + right * cos(t) * radius + fwd * sin(t) * radius + up * 8.0
-	var look := _replay_focus
+	var pos: Vector3
+	var look: Vector3 = _replay_focus
+	match replay_mode:
+		ReplayMode.SIDELINE:
+			var side_axis: Vector3 = up.cross(Vector3.FORWARD).normalized()
+			if side_axis.length_squared() < 0.1:
+				side_axis = Vector3.RIGHT
+			var slide: float = sin(_replay_time * 0.35) * 6.0
+			pos = _replay_focus + side_axis * (20.0 + slide) + up * 6.5 - Vector3.FORWARD * 3.0
+			look = _replay_focus + Vector3.FORWARD * 2.0
+		ReplayMode.BALL_CHASE:
+			var ball_pos: Vector3 = ball.global_position if ball != null and is_instance_valid(ball) else _replay_focus
+			var back: Vector3 = (ball_pos - _replay_focus).normalized()
+			if back.length_squared() < 0.1:
+				back = Vector3.FORWARD
+			pos = ball_pos - back * 15.0 + up * 7.0
+			look = ball_pos
+		_:
+			var t: float = _replay_time * 0.55
+			var right := Vector3(1.0, 0.0, 0.0)
+			if absf(up.dot(right)) > 0.9:
+				right = Vector3(0.0, 0.0, 1.0)
+			var fwd := up.cross(right).normalized()
+			var radius: float = 17.0 - minf(_replay_time * 1.2, 5.0)
+			pos = _replay_focus + right * cos(t) * radius + fwd * sin(t) * radius + up * 8.0
 	var basis := Transform3D.IDENTITY.looking_at(look, up).basis
 	global_transform = Transform3D(basis, pos)
 	if _replay_time >= _replay_duration:
