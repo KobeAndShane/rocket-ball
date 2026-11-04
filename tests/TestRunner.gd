@@ -64,6 +64,8 @@ func _run_all() -> void:
 	await _test_replay_codec()
 	await _test_replay_recorder_storage()
 	await _test_replay_player_and_browser()
+	await _test_accessibility_settings()
+	await _test_team_color_refresh()
 	await _test_car_settles_on_floor()
 	await _test_snapshot_codec()
 	await _test_input_redundancy()
@@ -1403,6 +1405,95 @@ func _test_replay_player_and_browser() -> void:
 	_check(ReplayStorage.delete_path(_test_replay_path), "replay can be deleted")
 	_check(not FileAccess.file_exists(_test_replay_path), "deleted replay is gone from disk")
 	_test_replay_path = ""
+
+
+func _test_accessibility_settings() -> void:
+	_begin("Accessibility settings")
+	var original_mode := Settings.get_int("a11y/colorblind_mode")
+	var original_override := Settings.get_bool("a11y/team_color_override")
+	var original_team1 := Settings.get_color("a11y/team1_color")
+	var original_flash := Settings.get_float("a11y/flash_intensity")
+	var original_filter := Settings.get_bool("a11y/chat_filter")
+	var original_mute := Settings.get_bool("a11y/chat_mute")
+	var original_deadzone := Settings.get_float("controls/deadzone")
+
+	Settings.set_setting("a11y/colorblind_mode", 1, false)
+	_check(A11y.colorblind_mode() == 1, "colourblind mode applies live")
+	_check(A11y.overlay_rect != null and A11y.overlay_rect.visible, "colourblind overlay is visible")
+	if A11y.overlay_material != null:
+		_check(int(A11y.overlay_material.get_shader_parameter("mode")) == 1, "shader receives the selected mode")
+	Settings.set_setting("a11y/colorblind_mode", 3, false)
+	_check(A11y.colorblind_mode_name() == "Tritanopia", "mode names are exposed")
+
+	Settings.set_setting("a11y/team_color_override", true, false)
+	Settings.set_setting("a11y/team1_color", Color(0.2, 1.0, 0.25), false)
+	Settings.set_setting("a11y/team2_color", Color(0.95, 0.2, 0.8), false)
+	var custom := A11y.team_color(1)
+	_check(custom.is_equal_approx(Color(0.2, 1.0, 0.25)), "team colour override reaches the service", str(custom))
+	_check(A11y.team_color(2).is_equal_approx(Color(0.95, 0.2, 0.8)), "both team colours are independent")
+	Settings.set_setting("a11y/team_color_override", false, false)
+	_check(A11y.team_color(1).is_equal_approx(Color(0.18, 0.64, 1.0)), "default blue returns when override is off")
+
+	Settings.set_setting("a11y/flash_intensity", 0.35, false)
+	_check(_near(A11y.flash_scale(), 0.35), "flash scale is clamped and exposed")
+	Settings.set_setting("a11y/chat_filter", true, false)
+	Settings.set_setting("a11y/chat_mute", true, false)
+	_check(A11y.chat_muted(), "chat mute persists")
+	_check(A11y.filter_chat("That was shit") == "That was ****", "profanity filter masks banned words")
+	_check(A11y.filter_chat("Good goal") == "Good goal", "clean chat is untouched")
+	Settings.set_setting("a11y/chat_filter", false, false)
+	_check(A11y.filter_chat("That was shit") == "That was shit", "filter can be disabled")
+
+	Settings.set_setting("controls/deadzone", 0.27)
+	var cfg := ConfigFile.new()
+	var loaded := cfg.load(Settings.CONFIG_PATH)
+	_check(loaded == OK, "settings file is written")
+	if loaded == OK:
+		_check(_near(float(cfg.get_value("controls", "deadzone", 0.0)), 0.27), "changed settings persist to user://settings.cfg")
+
+	var key := InputEventKey.new()
+	key.physical_keycode = KEY_K
+	_check(Settings.rebind_action("jump", 0, key), "a control binding can be remapped")
+	var slots := Settings.get_action_slots("jump")
+	_check(not slots.is_empty() and int((slots[0] as Dictionary).get("code", 0)) == KEY_K, "remapped binding applies immediately")
+	Settings.reset_bindings()
+
+	Settings.set_setting("a11y/colorblind_mode", original_mode, false)
+	Settings.set_setting("a11y/team_color_override", original_override, false)
+	Settings.set_setting("a11y/team1_color", original_team1, false)
+	Settings.set_setting("a11y/flash_intensity", original_flash, false)
+	Settings.set_setting("a11y/chat_filter", original_filter, false)
+	Settings.set_setting("a11y/chat_mute", original_mute, false)
+	Settings.set_setting("controls/deadzone", original_deadzone)
+
+
+func _test_team_color_refresh() -> void:
+	_begin("Team colour refresh")
+	var original_override := Settings.get_bool("a11y/team_color_override")
+	var original_team1 := Settings.get_color("a11y/team1_color")
+	var replacement := Color(0.15, 0.95, 0.4)
+	Settings.set_setting("a11y/team_color_override", true, false)
+	Settings.set_setting("a11y/team1_color", replacement, false)
+
+	var car := _track(CAR_SCENE.instantiate() as Car) as Car
+	car.team = 1
+	car.tuning = CAR_TUNING.duplicate() as CarTuning
+	add_child(car)
+	var goal := _track(GOAL_SCENE.instantiate() as Goal) as Goal
+	goal.defending_team = 1
+	add_child(goal)
+	await get_tree().process_frame
+	car.refresh_team_color()
+	goal.refresh_colors()
+	_check(car.team_color().is_equal_approx(replacement), "car reads the overridden team colour")
+	var glow := goal.get("_glow") as OmniLight3D
+	_check(glow != null and glow.light_color.is_equal_approx(replacement), "goal glow refreshes live")
+	var frame := goal.get("_frame_material") as StandardMaterial3D
+	_check(frame != null and frame.albedo_color.is_equal_approx(replacement), "goal frame refreshes live")
+
+	Settings.set_setting("a11y/team_color_override", original_override, false)
+	Settings.set_setting("a11y/team1_color", original_team1, false)
+	await _cleanup()
 
 
 func _report() -> void:

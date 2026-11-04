@@ -22,6 +22,7 @@ var boost_label: Label
 var speed_label: Label
 var super_label: Label
 var center_label: Label
+var subtitle_label: Label
 var feed_box: VBoxContainer
 var pause_overlay: ColorRect
 var postgame_overlay: ColorRect
@@ -34,6 +35,7 @@ var _feed_labels: Array[Label] = []
 var _feed_tweens: Array[Tween] = []
 var _feed_index: int = 0
 var _center_tween: Tween
+var _subtitle_tween: Tween
 var _font_bases: Dictionary = {}
 var _warning_active: bool = false
 var _warning_second: int = -1
@@ -86,6 +88,7 @@ func _build() -> void:
 	_build_boost()
 	_build_feed()
 	_build_center()
+	_build_subtitles()
 	_build_indicators()
 	_build_pause()
 	_build_postgame()
@@ -198,6 +201,20 @@ func _build_center() -> void:
 	root.add_child(center_label)
 
 
+func _build_subtitles() -> void:
+	subtitle_label = _label("", 22, Color(0.95, 0.97, 1.0), HORIZONTAL_ALIGNMENT_CENTER)
+	subtitle_label.set_anchors_and_offsets_preset(Control.PRESET_CENTER_BOTTOM)
+	subtitle_label.offset_left = -520.0
+	subtitle_label.offset_right = 520.0
+	subtitle_label.offset_top = -196.0
+	subtitle_label.offset_bottom = -150.0
+	subtitle_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	subtitle_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	subtitle_label.add_theme_constant_override("outline_size", 8)
+	subtitle_label.modulate.a = 0.0
+	root.add_child(subtitle_label)
+
+
 func _build_indicators() -> void:
 	indicators = HudIndicators.new()
 	indicators.name = "Indicators"
@@ -286,6 +303,7 @@ func _connect_events() -> void:
 	Events.request_pause.connect(_on_pause_requested)
 	Events.overtime_started.connect(_on_overtime)
 	Events.settings_changed.connect(_on_settings_changed)
+	Events.show_subtitle.connect(_on_subtitle)
 
 
 # --- Events ------------------------------------------------------------------
@@ -394,6 +412,23 @@ func _on_overtime() -> void:
 func _on_settings_changed(key: String, _value: Variant) -> void:
 	if key.begins_with("a11y/") or key == "*":
 		_apply_scales()
+		_apply_team_colors()
+
+
+func _on_subtitle(text: String, duration: float) -> void:
+	if subtitle_label == null:
+		return
+	if not Settings.get_bool("a11y/subtitles"):
+		subtitle_label.modulate.a = 0.0
+		return
+	subtitle_label.text = A11y.filter_chat(text) if Settings.get_bool("a11y/chat_filter") else text
+	subtitle_label.add_theme_font_size_override("font_size", int(round(Settings.get_float("a11y/subtitle_size") * _text_scale)))
+	if _subtitle_tween != null and _subtitle_tween.is_valid():
+		_subtitle_tween.kill()
+	subtitle_label.modulate.a = 1.0
+	_subtitle_tween = create_tween()
+	_subtitle_tween.tween_interval(maxf(duration, 0.5))
+	_subtitle_tween.tween_property(subtitle_label, "modulate:a", 0.0, 0.35)
 
 
 # --- Tick --------------------------------------------------------------------
@@ -540,8 +575,9 @@ func _flash_center(text: String, color: Color, duration: float) -> void:
 		_center_tween.kill()
 	center_label.text = text
 	center_label.modulate = color
-	center_label.modulate.a = 1.0
-	center_label.scale = Vector2.ONE
+	var flash := A11y.flash_scale()
+	center_label.modulate.a = clampf(flash, 0.0, 1.0)
+	center_label.scale = Vector2.ONE * (0.9 + 0.1 * flash)
 	_center_tween = create_tween()
 	_center_tween.tween_interval(duration)
 	_center_tween.tween_property(center_label, "modulate:a", 0.0, 0.45)
@@ -557,6 +593,14 @@ func _apply_scales() -> void:
 		var offset := Vector2(size.x * 0.5 * (1.0 - _ui_scale), size.y * 0.5 * (1.0 - _ui_scale))
 		transform = Transform2D(0.0, Vector2(_ui_scale, _ui_scale), 0.0, offset)
 	_refresh_fonts()
+	_apply_team_colors()
+
+
+func _apply_team_colors() -> void:
+	if team1_label != null:
+		team1_label.modulate = A11y.team_color(1)
+	if team2_label != null:
+		team2_label.modulate = A11y.team_color(2)
 
 
 func _refresh_fonts() -> void:

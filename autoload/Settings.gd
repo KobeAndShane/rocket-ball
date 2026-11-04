@@ -46,6 +46,7 @@ func _build_defaults() -> void:
 		"controls/camera_sensitivity": 1.0,
 		"controls/invert_pitch": false,
 		"controls/vibration": true,
+		"controls/steer_curve": 1, # 0 linear, 1 smooth, 2 aggressive
 		# Camera
 		"camera/fov": 100.0,
 		"camera/distance": 7.2,
@@ -70,6 +71,7 @@ func _build_defaults() -> void:
 		"a11y/subtitles": true,
 		"a11y/subtitle_size": 22.0,
 		"a11y/chat_filter": true,
+		"a11y/chat_mute": false,
 		# Gameplay / match defaults
 		"game/team_size": 3,
 		"game/bot_difficulty": 1,
@@ -203,6 +205,8 @@ func _apply_one(key: String, value: Variant) -> void:
 			var vp := get_viewport()
 			if vp != null:
 				vp.msaa_3d = int(value)
+		"video/quality":
+			_apply_quality(int(value))
 		"video/render_scale":
 			var vp := get_viewport()
 			if vp != null:
@@ -220,6 +224,14 @@ func _apply_one(key: String, value: Variant) -> void:
 			_set_bus_volume(bus_name, float(value))
 		"a11y/ui_scale", "a11y/text_scale":
 			pass # HUD reads these live.
+
+
+func _apply_quality(quality: int) -> void:
+	var q := clampi(quality, 0, 3)
+	var vp := get_viewport()
+	if vp != null:
+		vp.positional_shadow_atlas_size = [512, 1024, 2048, 4096][q]
+	RenderingServer.directional_soft_shadow_filter_set_quality(q)
 
 
 func _set_bus_volume(bus_name: String, linear: float) -> void:
@@ -406,4 +418,11 @@ func axis_from_actions(negative: String, positive: String) -> float:
 	var dz := get_float("controls/deadzone")
 	if absf(raw) < dz:
 		return 0.0
-	return signf(raw) * inverse_lerp(dz, 1.0, absf(raw))
+	var value := signf(raw) * inverse_lerp(dz, 1.0, absf(raw))
+	value *= clampf(get_float("controls/steer_sensitivity"), 0.1, 3.0)
+	match get_int("controls/steer_curve"):
+		1:
+			value = signf(value) * pow(absf(value), 1.35)
+		2:
+			value = signf(value) * pow(absf(value), 0.72)
+	return clampf(value, -1.0, 1.0)

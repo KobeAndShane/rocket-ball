@@ -271,11 +271,13 @@ func _make_trail(color: Color, amount: int, lifetime: float, vmin: float, vmax: 
 
 
 func team_color() -> Color:
-	if team == 1:
-		return Settings.get_color("a11y/team1_color") if Settings.get_bool("a11y/team_color_override") else Color(0.18, 0.64, 1.0)
-	if team == 2:
-		return Settings.get_color("a11y/team2_color") if Settings.get_bool("a11y/team_color_override") else Color(1.0, 0.42, 0.16)
-	return Color(0.75, 0.75, 0.8)
+	return A11y.team_color(team)
+
+
+func refresh_team_color() -> void:
+	_refresh_team_material()
+	if _name_tag != null:
+		_name_tag.modulate = team_color()
 
 
 func set_team(new_team: int) -> void:

@@ -12,6 +12,20 @@ var _match: MatchController
 var _mode_description: Label
 var _queue_status: Label
 var _preview_loadout: Dictionary = {}
+var _controls_status: Label
+var _awaiting_action: String = ""
+var _awaiting_slot: int = -1
+
+const RESOLUTION_OPTIONS: Array[Vector2i] = [
+	Vector2i(1280, 720), Vector2i(1600, 900), Vector2i(1920, 1080), Vector2i(2560, 1440),
+]
+const CONTROL_ACTIONS := [
+	["throttle", "Throttle"], ["brake", "Brake / reverse"],
+	["steer_left", "Steer left"], ["steer_right", "Steer right"],
+	["jump", "Jump"], ["boost", "Boost"], ["handbrake", "Handbrake / drift"],
+	["air_roll", "Air roll"], ["ball_cam", "Ball cam"], ["look_behind", "Look behind"],
+	["reset_car", "Reset car"], ["pause", "Pause"], ["scoreboard", "Scoreboard"],
+]
 
 
 func _ready() -> void:
@@ -196,9 +210,11 @@ func _show_settings() -> void:
 	content.add_child(_body("Changes apply immediately and are saved to user://settings.cfg."))
 	content.add_child(_section("VIDEO"))
 	content.add_child(_option("Window mode", "video/window_mode", ["Windowed", "Fullscreen", "Exclusive fullscreen"]))
+	content.add_child(_resolution("Resolution", "video/resolution"))
 	content.add_child(_option("Quality", "video/quality", ["Low", "Medium", "High", "Ultra"]))
 	content.add_child(_option("MSAA", "video/msaa", ["Off", "2x", "4x", "8x"]))
 	content.add_child(_option("Upscaler", "video/upscaler", ["Off", "FSR 1.0"]))
+	content.add_child(_check("Temporal anti-aliasing (TAA)", "video/taa"))
 	content.add_child(_slider("Render scale", "video/render_scale", 0.5, 1.5, 0.05))
 	content.add_child(_slider("FPS cap (0 = unlimited)", "video/fps_cap", 0.0, 240.0, 30.0))
 	content.add_child(_check("VSync", "video/vsync"))
@@ -206,6 +222,7 @@ func _show_settings() -> void:
 	content.add_child(_slider("Master", "audio/master", 0.0, 1.0, 0.01))
 	content.add_child(_slider("Music", "audio/music", 0.0, 1.0, 0.01))
 	content.add_child(_slider("SFX", "audio/sfx", 0.0, 1.0, 0.01))
+	content.add_child(_slider("Voice", "audio/voice", 0.0, 1.0, 0.01))
 	content.add_child(_slider("Announcer", "audio/announcer", 0.0, 1.0, 0.01))
 	content.add_child(_section("CAMERA & ACCESSIBILITY"))
 	content.add_child(_slider("Field of view", "camera/fov", 70.0, 120.0, 1.0))
@@ -221,15 +238,123 @@ func _show_settings() -> void:
 	content.add_child(_option("Colourblind mode", "a11y/colorblind_mode", ["Off", "Deuteranopia", "Protanopia", "Tritanopia"]))
 	content.add_child(_check("High contrast HUD", "a11y/high_contrast"))
 	content.add_child(_check("Subtitles", "a11y/subtitles"))
+	content.add_child(_slider("Subtitle size", "a11y/subtitle_size", 14.0, 36.0, 1.0))
+	content.add_child(_check("Team colour override", "a11y/team_color_override"))
+	content.add_child(_color("Team 1 colour", "a11y/team1_color"))
+	content.add_child(_color("Team 2 colour", "a11y/team2_color"))
+	content.add_child(_section("CHAT"))
+	content.add_child(_check("Profanity filter", "a11y/chat_filter"))
+	content.add_child(_check("Mute chat", "a11y/chat_mute"))
 	content.add_child(_section("CONTROLS"))
 	content.add_child(_slider("Controller deadzone", "controls/deadzone", 0.0, 0.5, 0.01))
 	content.add_child(_slider("Steer sensitivity", "controls/steer_sensitivity", 0.5, 2.0, 0.05))
+	content.add_child(_option("Steer curve", "controls/steer_curve", ["Linear", "Smooth", "Aggressive"]))
+	content.add_child(_small_button("CALIBRATE GAMEPAD", _calibrate_deadzone, 190.0))
+	content.add_child(_small_button("REMAP CONTROLS", _show_controls, 190.0))
 	content.add_child(_spacer(12))
 	var reset := _nav_button("RESET TO DEFAULTS", func() -> void:
 		Settings.reset_to_defaults()
 		_show_settings()
 	)
 	content.add_child(reset)
+
+
+func _show_controls() -> void:
+	_clear_content()
+	content.add_child(_heading("CONTROLS"))
+	content.add_child(_body("Click a binding, then press a key, mouse button or gamepad input. Every binding is saved to user://settings.cfg."))
+	_controls_status = _label("", 13, Color(1.0, 0.8, 0.35))
+	content.add_child(_controls_status)
+	for entry: Array in CONTROL_ACTIONS:
+		content.add_child(_binding_row(str(entry[0]), str(entry[1])))
+	content.add_child(_spacer(8))
+	content.add_child(_small_button("RESET BINDINGS", func() -> void:
+		Settings.reset_bindings()
+		_show_controls()
+	, 170.0))
+	content.add_child(_small_button("BACK TO SETTINGS", _show_settings, 170.0))
+
+
+func _binding_row(action: String, label: String) -> Control:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	var name_label := _label(label, 14, Color(0.78, 0.87, 0.97))
+	name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(name_label)
+	var slots := Settings.get_action_slots(action)
+	var visible_slots := maxi(slots.size(), 2)
+	for slot in visible_slots:
+		var spec: Dictionary = slots[slot] if slot < slots.size() else {}
+		var btn := _small_button(_binding_text(spec), func() -> void: _begin_rebind(action, slot), 150.0)
+		btn.modulate = Color(0.55, 0.85, 1.0) if slot == 0 else Color(0.68, 0.76, 0.86)
+		row.add_child(btn)
+	return row
+
+
+func _binding_text(spec: Dictionary) -> String:
+	match str(spec.get("t", "")):
+		"key":
+			return OS.get_keycode_string(int(spec.get("code", 0)) as Key)
+		"joy_button":
+			return "Pad %d" % int(spec.get("button", 0))
+		"joy_axis":
+			var value := float(spec.get("value", 1.0))
+			return "Axis %d %s" % [int(spec.get("axis", 0)), "+" if value > 0.0 else "-"]
+		"mouse":
+			return "Mouse %d" % int(spec.get("button", 0))
+	return "unbound"
+
+
+func _begin_rebind(action: String, slot: int) -> void:
+	_awaiting_action = action
+	_awaiting_slot = slot
+	if _controls_status != null:
+		_controls_status.text = "Press an input for %s (slot %d)..." % [action.replace("_", " "), slot + 1]
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	if _awaiting_action == "":
+		return
+	var chosen: InputEvent = null
+	if event is InputEventKey and event.pressed and not (event as InputEventKey).echo:
+		chosen = event
+	elif event is InputEventJoypadButton and event.pressed:
+		chosen = event
+	elif event is InputEventJoypadMotion and absf((event as InputEventJoypadMotion).axis_value) > 0.55:
+		chosen = event
+	elif event is InputEventMouseButton and event.pressed:
+		chosen = event
+	if chosen == null:
+		return
+	get_viewport().set_input_as_handled()
+	if Settings.rebind_action(_awaiting_action, _awaiting_slot, chosen):
+		var action := _awaiting_action
+		_awaiting_action = ""
+		_awaiting_slot = -1
+		_show_controls()
+		if _controls_status != null:
+			_controls_status.text = "Rebound %s." % action.replace("_", " ")
+	else:
+		if _controls_status != null:
+			_controls_status.text = "That input cannot be bound."
+
+
+func _calibrate_deadzone() -> void:
+	var pads := Input.get_connected_joypads()
+	if pads.is_empty():
+		if _controls_status != null:
+			_controls_status.text = "No gamepad detected. Deadzone unchanged."
+		Events.notification.emit("Connect a gamepad to calibrate the deadzone.")
+		return
+	var peak := 0.0
+	for pad: int in pads:
+		for axis in 6:
+			peak = maxf(peak, absf(Input.get_joy_axis(pad, axis as JoyAxis)))
+	var deadzone := clampf(peak + 0.02, 0.08, 0.5)
+	Settings.set_setting("controls/deadzone", deadzone)
+	if _controls_status != null:
+		_controls_status.text = "Calibrated deadzone to %.2f." % deadzone
+	Events.notification.emit("Gamepad deadzone calibrated to %.2f" % deadzone)
 
 
 func _show_online() -> void:
@@ -1211,6 +1336,46 @@ func _option(text: String, key: String, items: Array) -> Control:
 			Settings.set_setting(key, index)
 	)
 	row.add_child(option)
+	return row
+
+
+func _resolution(text: String, key: String) -> Control:
+	var row := HBoxContainer.new()
+	var lbl := _label(text, 14, Color(0.78, 0.87, 0.97))
+	lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(lbl)
+	var option := OptionButton.new()
+	option.custom_minimum_size = Vector2(220.0, 36.0)
+	var current: Variant = Settings.get_setting(key)
+	var selected := 0
+	for i in RESOLUTION_OPTIONS.size():
+		var size := RESOLUTION_OPTIONS[i]
+		option.add_item("%d x %d" % [size.x, size.y])
+		if current is Vector2i and current == size:
+			selected = i
+	option.selected = selected
+	option.item_selected.connect(func(index: int) -> void:
+		if not _updating and index >= 0 and index < RESOLUTION_OPTIONS.size():
+			Settings.set_setting(key, RESOLUTION_OPTIONS[index])
+	)
+	row.add_child(option)
+	return row
+
+
+func _color(text: String, key: String) -> Control:
+	var row := HBoxContainer.new()
+	var lbl := _label(text, 14, Color(0.78, 0.87, 0.97))
+	lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(lbl)
+	var picker := ColorPickerButton.new()
+	picker.color = Settings.get_color(key)
+	picker.edit_alpha = false
+	picker.custom_minimum_size = Vector2(220.0, 36.0)
+	picker.color_changed.connect(func(color: Color) -> void:
+		if not _updating:
+			Settings.set_setting(key, color)
+	)
+	row.add_child(picker)
 	return row
 
 

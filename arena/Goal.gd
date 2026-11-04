@@ -16,6 +16,7 @@ const GOAL_LAYER := 1 << 4
 var _latched: bool = false
 var _frame_material: StandardMaterial3D
 var _net_material: ShaderMaterial
+var _glow: OmniLight3D
 
 
 func _ready() -> void:
@@ -38,7 +39,7 @@ func _build_trigger() -> void:
 
 
 func _build_visuals() -> void:
-	var team_color := Color(0.18, 0.64, 1.0) if defending_team == 1 else Color(1.0, 0.42, 0.16)
+	var team_color := A11y.team_color(defending_team)
 	_frame_material = StandardMaterial3D.new()
 	_frame_material.albedo_color = team_color
 	_frame_material.emission_enabled = true
@@ -86,6 +87,7 @@ func _build_visuals() -> void:
 	glow.light_energy = 2.2
 	glow.omni_range = 14.0
 	glow.position = Vector3(0.0, 0.0, goal_depth * 0.6)
+	_glow = glow
 	add_child(glow)
 
 
@@ -108,13 +110,19 @@ func reset_latch() -> void:
 func apply_theme(theme: ArenaTheme) -> void:
 	if theme == null or _frame_material == null:
 		return
-	var team_color := Settings.get_color("a11y/team1_color") if defending_team == 1 and Settings.get_bool("a11y/team_color_override") else Color(0.18, 0.64, 1.0)
-	if defending_team == 2:
-		team_color = Settings.get_color("a11y/team2_color") if Settings.get_bool("a11y/team_color_override") else Color(1.0, 0.42, 0.16)
+	refresh_colors()
+
+
+func refresh_colors() -> void:
+	if _frame_material == null:
+		return
+	var team_color := A11y.team_color(defending_team)
 	_frame_material.albedo_color = team_color
 	_frame_material.emission = team_color
 	if _net_material != null:
 		_net_material.set_shader_parameter("net_color", Color(team_color.r, team_color.g, team_color.b, 0.28))
+	if _glow != null:
+		_glow.light_color = team_color
 
 
 func set_enabled(value: bool) -> void:

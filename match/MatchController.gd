@@ -120,6 +120,7 @@ func _connect_events() -> void:
 	Events.ball_hit.connect(_on_ball_hit)
 	Events.boost_changed.connect(_on_boost_changed)
 	Events.car_respawned.connect(_on_car_respawned)
+	Events.settings_changed.connect(_on_settings_changed)
 
 
 func _disconnect_events() -> void:
@@ -133,6 +134,19 @@ func _disconnect_events() -> void:
 		Events.boost_changed.disconnect(_on_boost_changed)
 	if Events.car_respawned.is_connected(_on_car_respawned):
 		Events.car_respawned.disconnect(_on_car_respawned)
+	if Events.settings_changed.is_connected(_on_settings_changed):
+		Events.settings_changed.disconnect(_on_settings_changed)
+
+
+func _on_settings_changed(key: String, _value: Variant) -> void:
+	if key != "*" and not key.begins_with("a11y/team"):
+		return
+	for car: Car in cars:
+		if car != null:
+			car.refresh_team_color()
+	if arena != null:
+		for goal: Goal in arena.goals:
+			goal.refresh_colors()
 
 
 func _spawn_world() -> void:
