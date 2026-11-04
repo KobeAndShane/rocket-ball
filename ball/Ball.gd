@@ -143,6 +143,39 @@ func last_hit_info() -> Dictionary:
 	}
 
 
+## Network snapshots: position, orientation, linear and angular velocity.
+func get_snapshot_state() -> Dictionary:
+	return {
+		"p": global_position,
+		"q": global_transform.basis.get_rotation_quaternion(),
+		"v": linear_velocity,
+		"w": angular_velocity,
+	}
+
+
+func set_snapshot_state(state: Dictionary) -> void:
+	if state.is_empty():
+		return
+	var p: Vector3 = state.get("p", global_position)
+	var q: Quaternion = state.get("q", Quaternion.IDENTITY)
+	global_transform = Transform3D(Basis(q).orthonormalized(), p)
+	linear_velocity = state.get("v", Vector3.ZERO)
+	angular_velocity = state.get("w", Vector3.ZERO)
+	sleeping = false
+
+
+## Client-side: snapshots own the ball; disable local collision/goal logic.
+func set_network_ghost(enabled: bool) -> void:
+	if enabled:
+		freeze = true
+		collision_layer = 0
+		collision_mask = 0
+	else:
+		freeze = false
+		collision_layer = BALL_LAYER
+		collision_mask = BALL_MASK
+
+
 func get_predicted_steps(steps: int, dt: float) -> Array[Vector3]:
 	var out: Array[Vector3] = []
 	var p := global_position

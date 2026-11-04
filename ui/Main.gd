@@ -13,6 +13,10 @@ var _mode_description: Label
 
 
 func _ready() -> void:
+	NetManager.match_started.connect(_on_net_match_started)
+	if NetManager.dedicated_server:
+		_start_dedicated_server()
+		return
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_build()
 	Events.profile_changed.connect(_refresh_profile)
@@ -232,28 +236,80 @@ func _show_online() -> void:
 	port_edit.custom_minimum_size = Vector2(90.0, 0.0)
 	ip_row.add_child(port_edit)
 	content.add_child(ip_row)
+	content.add_child(_spacer(4))
+	content.add_child(_section("LOBBY"))
+	if NetManager.players.is_empty():
+		content.add_child(_body("No peers connected."))
+	else:
+		for peer_id: int in NetManager.players.keys():
+			var entry: Dictionary = NetManager.players[peer_id]
+			var you := " (you)" if peer_id == NetManager.local_peer_id else ""
+			var ready_text := "READY" if bool(entry.get("ready", false)) else "not ready"
+			content.add_child(_body("#%d  %s%s   Team %d   %s" % [
+				peer_id,
+				str(entry.get("name", "Pilot")),
+				you,
+				int(entry.get("team", 1)),
+				ready_text,
+			]))
 	var buttons := HBoxContainer.new()
 	buttons.add_theme_constant_override("separation", 12)
-	var host_btn := _nav_button("HOST 3v3", func() -> void:
+	var host_btn := _nav_button("HOST", func() -> void:
 		var err := NetManager.host(int(port_edit.text))
 		if err == OK:
-			_start_match(3, 1, "Online Host")
+			_show_online()
 		else:
 			status_label.text = "Host failed: %d" % err
 	)
-	host_btn.custom_minimum_size = Vector2(220.0, 46.0)
+	host_btn.custom_minimum_size = Vector2(140.0, 46.0)
 	buttons.add_child(host_btn)
 	var join_btn := _nav_button("JOIN", func() -> void:
 		var err := NetManager.join(ip_edit.text, int(port_edit.text))
 		if err != OK:
 			status_label.text = "Join failed: %d" % err
+		else:
+			_show_online()
 	)
-	join_btn.custom_minimum_size = Vector2(160.0, 46.0)
+	join_btn.custom_minimum_size = Vector2(140.0, 46.0)
 	buttons.add_child(join_btn)
+	var start_btn := _nav_button("START 3v3", func() -> void:
+		if NetManager.is_server and not NetManager.is_offline:
+			_start_match(3, 1, "Online Host")
+	)
+	start_btn.custom_minimum_size = Vector2(180.0, 46.0)
+	start_btn.disabled = NetManager.is_offline or not NetManager.is_server
+	buttons.add_child(start_btn)
 	content.add_child(buttons)
+	var lobby_buttons := HBoxContainer.new()
+	lobby_buttons.add_theme_constant_override("separation", 12)
+	var local_ready: bool = bool(NetManager.players.get(NetManager.local_peer_id, {}).get("ready", false))
+	var ready_btn := _nav_button("UNREADY" if local_ready else "READY", func() -> void:
+		NetManager.set_ready(NetManager.local_peer_id, not local_ready)
+		_show_online()
+	)
+	ready_btn.custom_minimum_size = Vector2(160.0, 42.0)
+	ready_btn.disabled = NetManager.is_offline
+	lobby_buttons.add_child(ready_btn)
+	var invite_btn := _nav_button("INVITE ALL", func() -> void:
+		NetManager.invite_all()
+		_show_online()
+	)
+	invite_btn.custom_minimum_size = Vector2(160.0, 42.0)
+	invite_btn.disabled = not NetManager.is_server or NetManager.is_offline
+	lobby_buttons.add_child(invite_btn)
+	var leave_btn := _nav_button("LEAVE", func() -> void:
+		NetManager.leave()
+		_show_online()
+	)
+	leave_btn.custom_minimum_size = Vector2(140.0, 42.0)
+	leave_btn.disabled = NetManager.is_offline
+	lobby_buttons.add_child(leave_btn)
+	content.add_child(lobby_buttons)
 	content.add_child(_spacer(8))
-	var sim := _slider("Test latency (ms)", "net/test_latency", 0.0, 300.0, 10.0)
-	content.add_child(sim)
+	var ready_hint := "All players ready." if NetManager.is_lobby_ready() else "The host can start at any time; empty slots are filled by bots."
+	content.add_child(_body(ready_hint))
+	content.add_child(_slider("Test latency (ms)", "net/test_latency", 0.0, 300.0, 10.0))
+	content.add_child(_slider("Test packet loss (%)", "net/test_loss", 0.0, 30.0, 1.0))
 	content.add_child(_body("Networking is server-authoritative. Host a listen server or run a headless server with --headless --server."))
 
 
@@ -457,8 +513,107 @@ func _start_match(team_size: int, bot_tier: int, mode_name: String) -> void:
 	rules.mode_id = mode_name.to_lower().replace(" ", "_")
 	rules.fill_with_bots = true
 	if NetManager.is_server and not NetManager.is_offline:
-		rules.team_size = team_size
+		NetManager.team_size = team_size
+		NetManager.broadcast_match_start(_rules_to_dict(rules))
 	_launch(rules)
+
+
+## Headless/dedicated server: no menu, no camera, no HUD. All cars start as
+## bots and are handed to clients as they connect.
+func _start_dedicated_server() -> void:
+	var rules := MATCH_RULES.duplicate() as MatchRules
+	rules.team_size = NetManager.team_size
+	rules.bot_tier = 1
+	rules.fill_with_bots = true
+	rules.mode_name = "Dedicated"
+	var node := MATCH_SCENE.instantiate() as MatchController
+	node.rules = rules
+	node.auto_start = true
+	node.headless_mode = true
+	node.spawn_camera = false
+	node.spawn_hud = false
+	node.all_bots = true
+	_match = node
+	NetManager.broadcast_match_start(_rules_to_dict(rules))
+	add_child(node)
+	Events.network_status_changed.emit("Dedicated server ready")
+
+
+func _on_net_match_started(data: Dictionary) -> void:
+	if _match != null:
+		return
+	var rules := MATCH_RULES.duplicate() as MatchRules
+	_apply_rules_dict(rules, data)
+	_launch(rules)
+
+
+func _rules_to_dict(rules: MatchRules) -> Dictionary:
+	return {
+		"mode_name": rules.mode_name,
+		"mode_id": rules.mode_id,
+		"team_size": rules.team_size,
+		"match_duration": rules.match_duration,
+		"score_limit": rules.score_limit,
+		"overtime_enabled": rules.overtime_enabled,
+		"kickoff_countdown": rules.kickoff_countdown,
+		"goal_pause": rules.goal_pause,
+		"replay_enabled": rules.replay_enabled,
+		"replay_duration": rules.replay_duration,
+		"fill_with_bots": rules.fill_with_bots,
+		"bot_tier": rules.bot_tier,
+		"friendly_fire": rules.friendly_fire,
+		"demolition_enabled": rules.demolition_enabled,
+		"free_play": rules.free_play,
+		"unstuck_time": rules.unstuck_time,
+		"arena_theme_index": rules.arena_theme_index,
+		"gravity_interval": rules.gravity_interval,
+		"gravity_transition": rules.gravity_transition,
+		"gravity_warning": rules.gravity_warning,
+		"random_gravity": rules.random_gravity,
+		"gravity_strength": rules.gravity_strength,
+		"enabled_phases": rules.enabled_phases,
+		"ball_radius_scale": rules.ball_radius_scale,
+		"ball_mass_scale": rules.ball_mass_scale,
+		"boost_pads_enabled": rules.boost_pads_enabled,
+		"no_boost": rules.no_boost,
+		"unlimited_boost": rules.unlimited_boost,
+	}
+
+
+func _apply_rules_dict(rules: MatchRules, data: Dictionary) -> void:
+	rules.mode_name = str(data.get("mode_name", rules.mode_name))
+	rules.mode_id = str(data.get("mode_id", rules.mode_id))
+	rules.team_size = int(data.get("team_size", rules.team_size))
+	rules.match_duration = float(data.get("match_duration", rules.match_duration))
+	rules.score_limit = int(data.get("score_limit", rules.score_limit))
+	rules.overtime_enabled = bool(data.get("overtime_enabled", rules.overtime_enabled))
+	rules.kickoff_countdown = float(data.get("kickoff_countdown", rules.kickoff_countdown))
+	rules.goal_pause = float(data.get("goal_pause", rules.goal_pause))
+	rules.replay_enabled = bool(data.get("replay_enabled", rules.replay_enabled))
+	rules.replay_duration = float(data.get("replay_duration", rules.replay_duration))
+	rules.fill_with_bots = bool(data.get("fill_with_bots", rules.fill_with_bots))
+	rules.bot_tier = int(data.get("bot_tier", rules.bot_tier))
+	rules.friendly_fire = bool(data.get("friendly_fire", rules.friendly_fire))
+	rules.demolition_enabled = bool(data.get("demolition_enabled", rules.demolition_enabled))
+	rules.free_play = bool(data.get("free_play", rules.free_play))
+	rules.unstuck_time = float(data.get("unstuck_time", rules.unstuck_time))
+	rules.arena_theme_index = int(data.get("arena_theme_index", rules.arena_theme_index))
+	rules.gravity_interval = float(data.get("gravity_interval", rules.gravity_interval))
+	rules.gravity_transition = float(data.get("gravity_transition", rules.gravity_transition))
+	rules.gravity_warning = float(data.get("gravity_warning", rules.gravity_warning))
+	rules.random_gravity = bool(data.get("random_gravity", rules.random_gravity))
+	rules.gravity_strength = float(data.get("gravity_strength", rules.gravity_strength))
+	var phases: Variant = data.get("enabled_phases", null)
+	if phases is Array:
+		var converted: Array[bool] = []
+		for value: Variant in phases:
+			converted.append(bool(value))
+		rules.enabled_phases = converted
+	rules.ball_radius_scale = float(data.get("ball_radius_scale", rules.ball_radius_scale))
+	rules.ball_mass_scale = float(data.get("ball_mass_scale", rules.ball_mass_scale))
+	rules.boost_pads_enabled = bool(data.get("boost_pads_enabled", rules.boost_pads_enabled))
+	rules.no_boost = bool(data.get("no_boost", rules.no_boost))
+	rules.unlimited_boost = bool(data.get("unlimited_boost", rules.unlimited_boost))
 
 
 func _launch(rules: MatchRules) -> void:

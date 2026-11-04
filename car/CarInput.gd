@@ -36,6 +36,12 @@ func copy_from(other: CarInput) -> void:
 	tick = other.tick
 
 
+func duplicate() -> CarInput:
+	var copy := CarInput.new()
+	copy.copy_from(self)
+	return copy
+
+
 func get_flat_direction() -> Vector2:
 	return Vector2(steer, throttle)
 

@@ -46,6 +46,11 @@ func _run_all() -> void:
 	await _test_bots()
 	await _test_rank_helpers()
 	await _test_car_settles_on_floor()
+	await _test_snapshot_codec()
+	await _test_input_redundancy()
+	await _test_prediction_reconciliation()
+	await _test_network_simulation()
+	await _test_network_roster()
 
 
 # --- helpers -----------------------------------------------------------------
@@ -514,6 +519,148 @@ func _test_car_settles_on_floor() -> void:
 	_check(car.wheels_on_ground > 0 or car.is_grounded(), "car finds a surface on the wall", "wheels=%d state=%d" % [car.wheels_on_ground, car.state])
 	GravityManager.configure(null, 0)
 	await _cleanup()
+
+
+func _test_snapshot_codec() -> void:
+	_begin("Snapshot codec")
+	GravityManager.configure(null, 0)
+	var car := _track(CAR_SCENE.instantiate() as Car) as Car
+	car.car_id = 3
+	car.tuning = CAR_TUNING.duplicate() as CarTuning
+	add_child(car)
+	await _frames(1)
+	car.global_transform = Transform3D(Basis(Vector3.UP, 0.6), Vector3(4.0, -2.5, 7.25))
+	car.linear_velocity = Vector3(3.5, -1.25, 12.0)
+	if car.boost_component != null:
+		car.boost_component.set_amount(77.0)
+	var ball := _track(BALL_SCENE.instantiate() as Ball) as Ball
+	add_child(ball)
+	await _frames(1)
+	ball.set_snapshot_state({"p": Vector3(-6.5, 8.25, -12.0), "q": Quaternion.IDENTITY, "v": Vector3(1.0, 2.0, 3.0), "w": Vector3(0.5, 0.25, 0.125)})
+	var meta := {"state": 2, "score1": 4, "score2": 1, "time_left": 87.38, "countdown": 0.0, "overtime": 12.5}
+	var data := SnapshotCodec.encode(12345, 2, [car], ball, meta)
+	_check(data.size() > 20 and data.size() < 160, "snapshot fits the bandwidth budget", "bytes=%d" % data.size())
+	var decoded := SnapshotCodec.decode(data)
+	_check(int(decoded["tick"]) == 12345, "tick round-trips")
+	_check(int(decoded["phase"]) == 2, "gravity phase round-trips")
+	_check((decoded["cars"] as Array).size() == 1, "car count round-trips")
+	var snap_car: Dictionary = (decoded["cars"] as Array)[0]
+	_check(int(snap_car["id"]) == 3, "car id round-trips")
+	_check((snap_car["p"] as Vector3).distance_to(car.global_position) < 0.02, "quantised position is accurate")
+	_check(absf(absf((snap_car["q"] as Quaternion).dot(car.global_transform.basis.get_rotation_quaternion())) - 1.0) < 0.002, "packed quaternion is accurate")
+	_check((snap_car["v"] as Vector3).distance_to(car.linear_velocity) < 0.05, "velocity is accurate")
+	var snap_ball: Dictionary = decoded["ball"]
+	_check(not snap_ball.is_empty() and (snap_ball["p"] as Vector3).distance_to(ball.global_position) < 0.02, "ball state round-trips")
+	var dm: Dictionary = decoded["m"]
+	_check(int(dm["state"]) == 2 and int(dm["score1"]) == 4 and int(dm["score2"]) == 1, "match metadata round-trips")
+	_check(absf(float(dm["time_left"]) - 87.38) < 0.02, "match clock round-trips")
+	await _cleanup()
+
+
+func _test_input_redundancy() -> void:
+	_begin("Input buffering")
+	var buffer := InputBuffer.new()
+	for i in 5:
+		var input := CarInput.new()
+		input.tick = i
+		input.throttle = float(i) / 10.0
+		input.boost = i == 4
+		buffer.push(input)
+		buffer.push(input) # duplicate retransmission
+	var first := buffer.consume_new()
+	_check(first.size() == 5, "server applies each tick exactly once", "applied=%d" % first.size())
+	_check(buffer.consume_new().is_empty(), "duplicate retransmissions are ignored")
+	var latest := buffer.latest(3)
+	_check(latest.size() == 3 and latest[0].tick == 2 and latest[2].tick == 4, "redundancy carries the last three inputs")
+	var packed := InputBuffer.pack(latest)
+	var unpacked := InputBuffer.unpack(packed)
+	_check(unpacked.size() == 3, "input packet round-trips")
+	_check(unpacked[2].tick == 4 and unpacked[2].boost, "input tick and buttons survive packing")
+	_check(absf(unpacked[1].throttle - 0.3) < 0.02, "analogue throttle is quantised accurately")
+	await _cleanup()
+
+
+func _test_prediction_reconciliation() -> void:
+	_begin("Prediction reconciliation")
+	GravityManager.configure(null, 0)
+	var car := _track(CAR_SCENE.instantiate() as Car) as Car
+	car.tuning = CAR_TUNING.duplicate() as CarTuning
+	car.car_id = 0
+	add_child(car)
+	await _frames(1)
+	var prediction := PredictionController.new()
+	prediction.process_mode = Node.PROCESS_MODE_DISABLED
+	add_child(prediction)
+	_track(prediction)
+	prediction.setup(car, NetManager)
+	car.global_transform = Transform3D(Basis.IDENTITY, Vector3(50.0, 20.0, 0.0))
+	var pending := CarInput.new()
+	pending.tick = 10
+	prediction.history.push(pending)
+	prediction.apply_snapshot({"p": Vector3(0.0, 2.0, 0.0), "q": Quaternion.IDENTITY, "v": Vector3.ZERO, "s": 0}, 9)
+	_check(prediction.corrections == 1, "large divergence triggers a correction")
+	_check(car.global_position.distance_to(Vector3(0.0, 2.0, 0.0)) < 0.2, "car snaps to authority then replays pending input", "pos=%s" % car.global_position)
+	car.global_transform = Transform3D(Basis.IDENTITY, Vector3(0.12, 2.0, 0.0))
+	prediction.history.clear()
+	prediction.apply_snapshot({"p": Vector3(0.0, 2.0, 0.0), "q": Quaternion.IDENTITY, "v": Vector3.ZERO, "s": 0}, 11)
+	_check(prediction.last_snapshot_error > 0.05, "small divergence is measured")
+	_check(prediction._has_correction, "small divergence is blended rather than teleported")
+	await _cleanup()
+
+
+func _test_network_simulation() -> void:
+	_begin("Network simulation")
+	NetManager.set_simulated_network(120, 0.0)
+	_check(NetManager.get_ping_ms() == 120, "artificial latency is reported")
+	_check(_near(NetManager.latency_seconds(), 0.12, 0.001), "latency converts to seconds")
+	NetManager.set_simulated_network(0, 1.0)
+	_check(NetManager.should_drop_packet(), "100% loss drops packets")
+	NetManager.set_simulated_network(0, 0.0)
+	_check(not NetManager.should_drop_packet(), "zero loss delivers packets")
+	var before := NetManager.server_tick
+	NetManager._physics_process(1.0 / 120.0)
+	NetManager._physics_process(1.0 / 120.0)
+	_check(NetManager.server_tick == before + 2, "shared tick counter advances at physics rate")
+	await _cleanup()
+
+
+func _test_network_roster() -> void:
+	_begin("Network roster")
+	NetManager.is_offline = false
+	NetManager.is_server = false
+	NetManager.local_peer_id = 2
+	NetManager.players = {
+		1: {"name": "Host", "team": 1, "car_id": 0, "ready": true, "party": ""},
+		2: {"name": "Client", "team": 1, "car_id": 1, "ready": true, "party": ""},
+	}
+	var rules := RULES.duplicate() as MatchRules
+	rules.team_size = 3
+	rules.fill_with_bots = true
+	rules.kickoff_countdown = 3.0
+	var scene := MATCH_SCENE.instantiate() as MatchController
+	scene.rules = rules
+	scene.auto_start = false
+	scene.headless_mode = true
+	scene.spawn_camera = false
+	scene.spawn_hud = false
+	_track(scene)
+	add_child(scene)
+	scene.process_mode = Node.PROCESS_MODE_DISABLED
+	_check(scene.cars.size() == 6, "client builds the full 3v3 roster", "cars=%d" % scene.cars.size())
+	_check(NetManager.cars.size() == 6, "every car is registered with the network")
+	_check(scene.local_car != null and scene.local_car.car_id == 1, "local car follows the lobby assignment")
+	_check(scene.local_car.control_mode == Car.DriveMode.HUMAN, "local car is human-controlled")
+	var remote_ok := true
+	for car: Car in scene.cars:
+		if car == scene.local_car:
+			continue
+		if car.control_mode != Car.DriveMode.NETWORK or not car.frozen or car.collision_layer != 0:
+			remote_ok = false
+	_check(remote_ok, "remote cars are frozen snapshot proxies")
+	_check(scene.ball.freeze and scene.ball.collision_layer == 0, "client ball is snapshot-driven")
+	await _cleanup()
+	NetManager.start_offline()
+	GravityManager.configure(null, 0)
 
 
 func _report() -> void:
