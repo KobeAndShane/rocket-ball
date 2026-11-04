@@ -15,6 +15,7 @@ var timer_label: Label
 var gravity_label: Label
 var shift_label: Label
 var next_label: Label
+var next_arrow: Label
 var shift_bar: ProgressBar
 var boost_bar: ProgressBar
 var boost_label: Label
@@ -125,7 +126,14 @@ func _build_gravity() -> void:
 	shift_bar.value = 1.0
 	vbox.add_child(shift_bar)
 	next_label = _label("NEXT: WALL A", 14, Color(1.0, 0.72, 0.3))
-	vbox.add_child(next_label)
+	var next_row := HBoxContainer.new()
+	next_row.add_theme_constant_override("separation", 8)
+	next_arrow = _label("\u25BC", 24, Color(1.0, 0.72, 0.3), HORIZONTAL_ALIGNMENT_CENTER)
+	next_arrow.custom_minimum_size = Vector2(34.0, 28.0)
+	next_arrow.pivot_offset = Vector2(17.0, 14.0)
+	next_row.add_child(next_arrow)
+	next_row.add_child(next_label)
+	vbox.add_child(next_row)
 
 
 func _build_boost() -> void:
@@ -447,6 +455,22 @@ func _update_gravity() -> void:
 	var interval: float = maxf(GravityManager.shift_interval, 0.01)
 	shift_bar.value = clampf(GravityManager.time_until_shift() / interval, 0.0, 1.0)
 	next_label.text = "NEXT: %s" % _dir_name(GravityManager.next_direction())
+	_update_gravity_arrow()
+
+
+## Screen-space arrow showing where "down" will point after the shift. The HUD
+## itself never rotates, so it stays readable in every gravity orientation.
+func _update_gravity_arrow() -> void:
+	if next_arrow == null:
+		return
+	var cam := get_viewport().get_camera_3d()
+	if cam == null:
+		return
+	var local: Vector3 = cam.global_transform.basis.inverse() * GravityManager.next_direction()
+	var screen_dir := Vector2(local.x, -local.y)
+	if screen_dir.length_squared() < 0.0001:
+		return
+	next_arrow.rotation = atan2(screen_dir.x, screen_dir.y)
 
 
 func _dir_name(dir: Vector3) -> String:
@@ -536,10 +560,14 @@ func _apply_scales() -> void:
 
 
 func _refresh_fonts() -> void:
+	var high_contrast: bool = Settings.get_bool("a11y/high_contrast")
+	var outline: int = 10 if high_contrast else 5
 	for key: Variant in _font_bases.keys():
 		var label := key as Label
 		if is_instance_valid(label):
 			label.add_theme_font_size_override("font_size", int(round(float(_font_bases[key]) * _text_scale)))
+			label.add_theme_constant_override("outline_size", outline)
+			label.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 1.0))
 
 
 func _label(text: String, size: int, color: Color, align: HorizontalAlignment = HORIZONTAL_ALIGNMENT_LEFT) -> Label:
