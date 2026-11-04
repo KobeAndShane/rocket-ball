@@ -15,6 +15,7 @@ const CAMERA_SCENE := preload("res://camera/ChaseCamera.tscn")
 const BOT_TIERS := preload("res://bots/BotTiers.tres")
 const BASE_CAR_TUNING := preload("res://car/CarTuning.tres")
 const BASE_BALL_TUNING := preload("res://ball/BallTuning.tres")
+const VFX_SERVICE := preload("res://vfx/VFXService.gd")
 
 @export var rules: MatchRules
 @export var auto_start: bool = true
@@ -30,6 +31,7 @@ var cars: Array[Car] = []
 var local_car: Car
 var camera: ChaseCamera
 var hud: CanvasLayer
+var vfx: VFXService
 
 var state: State = State.LOBBY
 var score1: int = 0
@@ -177,7 +179,15 @@ func _spawn_world() -> void:
 			if hud.has_method("setup"):
 				hud.call("setup", self)
 	_spawn_audio()
+	_spawn_vfx()
 	_spawn_replay_recorder()
+
+
+func _spawn_vfx() -> void:
+	vfx = VFX_SERVICE.new() as VFXService
+	vfx.name = "VFX"
+	vfx.setup(self, arena)
+	add_child(vfx)
 
 
 func _spawn_replay_recorder() -> void:

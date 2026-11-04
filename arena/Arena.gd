@@ -82,7 +82,8 @@ func apply_theme(new_theme: ArenaTheme) -> void:
 		elif node is DirectionalLight3D:
 			(node as DirectionalLight3D).light_energy = theme.sun_energy
 		elif node is OmniLight3D:
-			(node as OmniLight3D).light_color = theme.trim_color
+			var light := node as OmniLight3D
+			light.light_color = theme.accent_color if light.name.begins_with("Accent") else theme.trim_color
 	for goal: Goal in goals:
 		if goal != null:
 			goal.apply_theme(theme)
@@ -191,6 +192,15 @@ func _add_trim_bands() -> void:
 	# Goal line bands.
 	for s: float in [-1.0, 1.0]:
 		_add_visual_box(Vector3(0.0, -h.y + inset + 0.09, s * (h.z - inset)), Vector3(GOAL_WIDTH + 1.0, 0.05, 0.18), _trim_mat)
+	# Four long emissive accent rails make the arena orientation readable from
+	# every gravity phase without relying on a single floor.
+	for sx: float in [-1.0, 1.0]:
+		for sy: float in [-1.0, 1.0]:
+			_add_visual_box(
+				Vector3(sx * (h.x - inset - 0.10), sy * (h.y - inset - 0.10), 0.0),
+				Vector3(0.10, 0.10, h.z * 2.0 - 0.8),
+				_trim_mat
+			)
 
 
 func _add_box(center: Vector3, size: Vector3, mat: Material) -> void:
@@ -431,6 +441,15 @@ func _build_environment() -> void:
 	env.fog_density = theme.fog_density
 	world_env.environment = env
 	add_child(world_env)
+	# One interior probe captures the emissive trim and goal accents for the car
+	# and ball PBR materials without a costly per-frame update.
+	var probe := ReflectionProbe.new()
+	probe.name = "ArenaReflectionProbe"
+	probe.size = Vector3(HALF_EXTENTS.x * 2.0, HALF_EXTENTS.y * 2.0, HALF_EXTENTS.z * 2.0)
+	probe.interior = true
+	probe.box_projection = true
+	probe.update_mode = ReflectionProbe.UPDATE_ONCE
+	add_child(probe)
 	var sun := DirectionalLight3D.new()
 	sun.name = "Sun"
 	sun.rotation_degrees = Vector3(-58.0, -38.0, 0.0)
@@ -446,3 +465,12 @@ func _build_environment() -> void:
 	fill.light_energy = 0.6
 	fill.omni_range = 90.0
 	add_child(fill)
+	for s: float in [-1.0, 1.0]:
+		var accent := OmniLight3D.new()
+		accent.name = "AccentLight%s" % ("A" if s < 0.0 else "B")
+		accent.position = Vector3(s * 17.0, 8.0, 0.0)
+		accent.light_color = theme.accent_color
+		accent.light_energy = 0.42
+		accent.omni_range = 34.0
+		accent.shadow_enabled = false
+		add_child(accent)

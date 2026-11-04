@@ -47,7 +47,7 @@ var _demolish_cooldown: float = 0.0
 var _jump_ignore: float = 0.0
 var _last_state: State = State.AIRBORNE
 var _body_meshes: Array[MeshInstance3D] = []
-var _team_material: StandardMaterial3D
+var _team_material: ShaderMaterial
 var _wheel_nodes: Array[Node3D] = []
 var _name_tag: Label3D
 var _is_local_visual: bool = false
@@ -84,6 +84,8 @@ var _antenna_flag: MeshInstance3D
 var _antenna_flag_material: StandardMaterial3D
 var _boost_trail: CPUParticles3D
 var _speed_trail: CPUParticles3D
+var _boost_flame: MeshInstance3D
+var _flame_material: StandardMaterial3D
 
 
 func _ready() -> void:
@@ -136,14 +138,11 @@ func _build_visuals() -> void:
 		_body_meshes.append(cabin)
 		_base_cabin_position = cabin.position
 		_base_cabin_scale = cabin.scale
-	_team_material = StandardMaterial3D.new()
-	_team_material.albedo_color = team_color()
-	_team_material.metallic = 0.45
-	_team_material.roughness = 0.35
-	_team_material.emission_enabled = true
-	_team_material.emission = team_color() * 0.22
+	_team_material = ShaderMaterial.new()
+	_team_material.shader = load("res://vfx/car_paint.gdshader")
 	for m in _body_meshes:
 		m.material_override = _team_material
+	_refresh_team_material()
 	# Wheels are visual-only; physics uses rays.
 	_build_wheels()
 	_build_decal()
@@ -240,6 +239,31 @@ func _build_trails() -> void:
 	_speed_trail.name = "SpeedTrail"
 	_speed_trail.position = Vector3(0.0, 0.12, 1.55)
 	add_child(_speed_trail)
+	# A short additive cone makes the boost flame readable even without bloom.
+	_flame_material = StandardMaterial3D.new()
+	_flame_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_flame_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_flame_material.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	_flame_material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_flame_material.emission_enabled = true
+	_flame_material.emission = Color(0.3, 0.7, 1.0)
+	_flame_material.emission_energy_multiplier = 2.5
+	_flame_material.albedo_color = Color(0.3, 0.7, 1.0, 0.65)
+	var flame_mesh := CylinderMesh.new()
+	flame_mesh.top_radius = 0.015
+	flame_mesh.bottom_radius = 0.20
+	flame_mesh.height = 0.95
+	flame_mesh.radial_segments = 10
+	flame_mesh.rings = 1
+	_boost_flame = MeshInstance3D.new()
+	_boost_flame.name = "BoostFlame"
+	_boost_flame.mesh = flame_mesh
+	_boost_flame.material_override = _flame_material
+	_boost_flame.rotation_degrees = Vector3(90.0, 0.0, 0.0)
+	_boost_flame.position = Vector3(0.0, 0.05, 2.02)
+	_boost_flame.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_boost_flame.visible = false
+	add_child(_boost_flame)
 
 
 func _make_trail(color: Color, amount: int, lifetime: float, vmin: float, vmax: float, size: float) -> CPUParticles3D:
@@ -278,6 +302,15 @@ func refresh_team_color() -> void:
 	_refresh_team_material()
 	if _name_tag != null:
 		_name_tag.modulate = team_color()
+	_refresh_movement_colors()
+
+
+func _refresh_movement_colors() -> void:
+	if _flame_material != null and (_boost_item == null or _boost_item.primary_color.a <= 0.0):
+		_flame_material.albedo_color = Color(team_color().r, team_color().g, team_color().b, 0.65)
+		_flame_material.emission = team_color()
+	if _speed_trail != null and (_trail_item == null or _trail_item.trail_style <= 0):
+		_speed_trail.color = team_color().lerp(Color.WHITE, 0.25)
 
 
 func set_team(new_team: int) -> void:
@@ -356,11 +389,11 @@ func _refresh_team_material() -> void:
 		metallic = _body_item.metallic
 		roughness = _body_item.roughness
 		emission = clampf(_body_item.emission_strength, 0.05, 1.5)
-	_team_material.albedo_color = base
-	_team_material.metallic = metallic
-	_team_material.roughness = roughness
-	_team_material.emission_enabled = true
-	_team_material.emission = accent * emission
+	_team_material.set_shader_parameter("team_color", base)
+	_team_material.set_shader_parameter("accent_color", accent)
+	_team_material.set_shader_parameter("metallic_amount", metallic)
+	_team_material.set_shader_parameter("roughness_amount", roughness)
+	_team_material.set_shader_parameter("emission_strength", emission)
 
 
 func _apply_body_cosmetic(item: CosmeticItem) -> void:
@@ -426,22 +459,35 @@ func _apply_trail_cosmetics(boost_item: CosmeticItem, trail_item: CosmeticItem) 
 		_boost_trail.color = boost_item.primary_color
 		_boost_trail.scale_amount_min = 0.25 + float(boost_item.trail_style) * 0.08
 		_boost_trail.scale_amount_max = 0.85 + float(boost_item.trail_style) * 0.12
+	if _flame_material != null and boost_item != null:
+		_flame_material.albedo_color = Color(boost_item.primary_color.r, boost_item.primary_color.g, boost_item.primary_color.b, 0.72)
+		_flame_material.emission = boost_item.primary_color
+		_flame_material.emission_energy_multiplier = 2.2 + float(boost_item.trail_style) * 0.55
+	# Supersonic wake is a gameplay readability cue, so it is always present.
+	# Cosmetics change its colour/style, never whether it can be seen.
 	if _speed_trail != null:
-		var enabled: bool = trail_item != null and trail_item.trail_style > 0
-		_speed_trail.visible = enabled
-		if enabled:
+		_speed_trail.visible = true
+		if trail_item != null and trail_item.trail_style > 0:
 			_speed_trail.color = trail_item.accent_color
 			_speed_trail.scale_amount_min = 0.2 + float(trail_item.trail_style) * 0.07
 			_speed_trail.scale_amount_max = 0.7 + float(trail_item.trail_style) * 0.1
+		else:
+			_speed_trail.color = team_color().lerp(Color.WHITE, 0.25)
+			_speed_trail.scale_amount_min = 0.24
+			_speed_trail.scale_amount_max = 0.72
 
 
 func _update_cosmetic_effects() -> void:
 	var boosting: bool = input.boost and boost_component != null and boost_component.amount > 0.0
 	if _boost_trail != null:
 		_boost_trail.emitting = boosting and state != State.DEMOLISHED and not frozen
+	if _boost_flame != null:
+		_boost_flame.visible = boosting and state != State.DEMOLISHED and not frozen
+		if _boost_flame.visible:
+			var flicker: float = 0.88 + 0.12 * sin(float(Time.get_ticks_msec()) * 0.035)
+			_boost_flame.scale = Vector3(1.0, 1.0, flicker)
 	if _speed_trail != null:
-		var trail_ok: bool = _trail_item != null and _trail_item.trail_style > 0
-		_speed_trail.emitting = trail_ok and is_supersonic and state != State.DEMOLISHED and not frozen
+		_speed_trail.emitting = is_supersonic and state != State.DEMOLISHED and not frozen
 	if _antenna_root != null and _antenna_root.visible and GravityManager.up.length_squared() > 0.001:
 		# Keep the little flag pointing away from the current floor.
 		var want: Vector3 = GravityManager.up

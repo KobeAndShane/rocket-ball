@@ -66,6 +66,8 @@ func _run_all() -> void:
 	await _test_replay_player_and_browser()
 	await _test_accessibility_settings()
 	await _test_team_color_refresh()
+	await _test_vfx_pool_and_shift()
+	await _test_visual_polish()
 	await _test_car_settles_on_floor()
 	await _test_snapshot_codec()
 	await _test_input_redundancy()
@@ -1493,6 +1495,119 @@ func _test_team_color_refresh() -> void:
 
 	Settings.set_setting("a11y/team_color_override", original_override, false)
 	Settings.set_setting("a11y/team1_color", original_team1, false)
+	await _cleanup()
+
+
+func _test_vfx_pool_and_shift() -> void:
+	_begin("Pooled VFX and gravity-shift feedback")
+	var service := VFXService.new() as VFXService
+	service.name = "TestVFX"
+	add_child(service)
+	_track(service)
+	await get_tree().process_frame
+	var sizes := service.pool_sizes()
+	_check(int(sizes.get("impacts", 0)) >= 8, "impact bursts are pooled", "impacts=%d" % int(sizes.get("impacts", 0)))
+	_check(int(sizes.get("goals", 0)) >= 2, "goal bursts are pooled")
+	_check(int(sizes.get("rings", 0)) >= 4, "shockwave rings are pooled")
+	_check(int(sizes.get("total_particles", 9999)) < 900, "particle budget stays bounded", "particles=%d" % int(sizes.get("total_particles", 0)))
+	_check(service.is_prewarmed(), "effects are pre-warmed at build time")
+	_check(service.active_effect_count() == 0, "pool starts idle")
+	var child_count := service.get_child_count()
+	for i in 40:
+		service.play_impact(Vector3(float(i) * 0.1, 0.0, 0.0), 20.0, -1)
+	_check(service.get_child_count() == child_count, "repeated hits reuse pool nodes")
+	_check(service.active_effect_count() > 0, "impact burst activates")
+	service.play_goal(1, Vector3.ZERO)
+	await _frames(1)
+	_check(service.overlay_rect != null and service.overlay_rect.visible, "goal celebration tint appears")
+	service.play_gravity_shift(GravityManager.gravity_dir, GravityManager.PHASE_CEILING, 0.5)
+	_check(service.is_shift_active(), "gravity shift effect starts")
+	_check(service.rim_visible(), "arena edge glow becomes visible")
+	_check(service.overlay_rect.visible, "shift tint pass becomes visible")
+	await _frames(2)
+	var material := service.get("_rim_material") as StandardMaterial3D
+	_check(material != null and material.emission_energy_multiplier > 0.0, "edge glow pulses with emission")
+	Events.gravity_shift_finished.emit(2)
+	await get_tree().process_frame
+	_check(not service.is_shift_active(), "gravity shift effect ends")
+	_check(not service.overlay_rect.visible, "shift tint pass hides afterwards")
+
+	var original_reduced := Settings.get_bool("a11y/reduced_motion")
+	Settings.set_setting("a11y/reduced_motion", true, false)
+	service.play_gravity_shift(GravityManager.gravity_dir, GravityManager.PHASE_WALL_A, 0.5)
+	await _frames(1)
+	var aberration := float(service.overlay_material.get_shader_parameter("aberration"))
+	_check(aberration <= 0.001, "reduced motion removes chromatic aberration", "aberration=%.3f" % aberration)
+	Events.gravity_shift_finished.emit(1)
+	Settings.set_setting("a11y/reduced_motion", original_reduced, false)
+	await _cleanup()
+
+
+func _test_visual_polish() -> void:
+	_begin("Arena art, PBR materials and readout effects")
+	var arena_scene := load("res://arena/Arena.tscn") as PackedScene
+	var arena := _track(arena_scene.instantiate() as Arena) as Arena
+	add_child(arena)
+	await get_tree().process_frame
+	_check(arena.get_node_or_null("ArenaReflectionProbe") is ReflectionProbe, "arena has an interior reflection probe")
+	var accent := arena.get_node_or_null("AccentLightA") as OmniLight3D
+	_check(accent != null, "accent lighting is built")
+	if accent != null:
+		_check(accent.light_color.is_equal_approx(arena.theme.accent_color), "accent light follows the theme")
+	_check(arena.theme_names().size() >= 3, "at least three arena themes exist")
+	var floor_mat := arena.get("_floor_mat") as StandardMaterial3D
+	var ice := load("res://arena/ArenaTheme_Ice.tres") as ArenaTheme
+	if floor_mat != null and ice != null:
+		arena.apply_theme(ice)
+		_check(floor_mat.albedo_color.is_equal_approx(ice.floor_color), "theme swap updates arena materials")
+		_check(accent != null and accent.light_color.is_equal_approx(ice.accent_color), "theme swap updates accent lights")
+
+	var car := _track(CAR_SCENE.instantiate() as Car) as Car
+	car.tuning = CAR_TUNING.duplicate() as CarTuning
+	add_child(car)
+	await get_tree().process_frame
+	car.apply_cosmetics(CosmeticLibrary.default_loadout())
+	var body := car.get_node_or_null("BodyMesh") as MeshInstance3D
+	_check(body != null and body.material_override is ShaderMaterial, "car body uses the PBR team-paint shader")
+	var paint: ShaderMaterial = null
+	if body != null:
+		paint = body.material_override as ShaderMaterial
+	_check(paint != null and paint.get_shader_parameter("team_color") != null, "car paint receives a team-colour mask")
+	var flame := car.get_node_or_null("BoostFlame") as MeshInstance3D
+	_check(flame != null, "boost flame mesh exists")
+	_check(flame != null and not flame.visible, "boost flame is idle until boosting")
+	var speed_trail := car.get_node_or_null("SpeedTrail") as CPUParticles3D
+	_check(speed_trail != null and speed_trail.visible, "supersonic trail is always available")
+	var original_override := Settings.get_bool("a11y/team_color_override")
+	var original_team1 := Settings.get_color("a11y/team1_color")
+	var replacement := Color(0.15, 1.0, 0.45)
+	var default_paint := Color.WHITE
+	if paint != null:
+		default_paint = paint.get_shader_parameter("team_color")
+	Settings.set_setting("a11y/team_color_override", true, false)
+	Settings.set_setting("a11y/team1_color", replacement, false)
+	car.team = 1
+	car.refresh_team_color()
+	if paint != null:
+		var painted: Color = paint.get_shader_parameter("team_color")
+		_check(not painted.is_equal_approx(default_paint) and painted.g > painted.r, "live team colour reaches the paint shader", str(painted))
+	Settings.set_setting("a11y/team_color_override", original_override, false)
+	Settings.set_setting("a11y/team1_color", original_team1, false)
+
+	var ball := _track(BALL_SCENE.instantiate() as Ball) as Ball
+	ball.tuning = (load("res://ball/BallTuning.tres") as BallTuning).duplicate() as BallTuning
+	add_child(ball)
+	await get_tree().process_frame
+	var ball_mesh := ball.get_node_or_null("BallMesh") as MeshInstance3D
+	_check(ball_mesh != null and ball_mesh.material_override is ShaderMaterial, "ball uses the PBR panel shader")
+	var trail := ball.get_node_or_null("BallTrail") as GPUParticles3D
+	_check(trail != null, "ball trail particles exist")
+	ball.linear_velocity = Vector3(32.0, 0.0, 0.0)
+	await _frames(2)
+	_check(trail != null and trail.emitting, "ball trail emits at speed")
+	ball.linear_velocity = Vector3.ZERO
+	await _frames(2)
+	_check(trail != null and not trail.emitting, "ball trail stops when slow")
 	await _cleanup()
 
 

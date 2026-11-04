@@ -15,6 +15,8 @@ var _last_hit_position := Vector3.ZERO
 var _last_hit_strength: float = 0.0
 var _time_since_hit: float = 999.0
 var last_hitter_id: int = -1
+var _trail: GPUParticles3D
+var _trail_process: ParticleProcessMaterial
 
 
 func _ready() -> void:
@@ -37,6 +39,8 @@ func _ready() -> void:
 		var sphere := mesh_node.mesh as SphereMesh
 		sphere.radius = tuning.radius
 		sphere.height = tuning.radius * 2.0
+		_apply_ball_material(mesh_node)
+	_build_trail()
 
 
 func _apply_tuning() -> void:
@@ -51,10 +55,94 @@ func _apply_tuning() -> void:
 	mat.friction = tuning.friction
 
 
+func _apply_ball_material(mesh_node: MeshInstance3D) -> void:
+	var shader := load("res://vfx/ball_panel.gdshader") as Shader
+	if shader == null:
+		return
+	var material := ShaderMaterial.new()
+	material.shader = shader
+	material.set_shader_parameter("base_color", Color(0.84, 0.88, 0.96))
+	material.set_shader_parameter("seam_color", Color(0.16, 0.68, 1.0))
+	material.set_shader_parameter("seam_glow", 0.85)
+	mesh_node.material_override = material
+
+
+func _build_trail() -> void:
+	_trail = GPUParticles3D.new()
+	_trail.name = "BallTrail"
+	_trail.amount = 56
+	_trail.lifetime = 0.48
+	_trail.one_shot = false
+	_trail.explosiveness = 0.0
+	_trail.randomness = 0.45
+	_trail.fixed_fps = 60
+	_trail.interpolate = true
+	_trail.local_coords = false
+	_trail.emitting = false
+	_trail.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_trail.visibility_aabb = AABB(Vector3(-40.0, -30.0, -50.0), Vector3(80.0, 60.0, 100.0))
+	_trail_process = ParticleProcessMaterial.new()
+	_trail_process.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+	_trail_process.emission_sphere_radius = tuning.radius * 0.55
+	_trail_process.direction = Vector3.UP
+	_trail_process.spread = 180.0
+	_trail_process.initial_velocity_min = 0.4
+	_trail_process.initial_velocity_max = 2.2
+	_trail_process.gravity = Vector3.ZERO
+	_trail_process.damping_min = 0.8
+	_trail_process.damping_max = 2.0
+	_trail_process.scale_min = 0.28
+	_trail_process.scale_max = 0.72
+	_trail_process.color = Color(0.38, 0.78, 1.0, 1.0)
+	var gradient := Gradient.new()
+	gradient.set_color(0, Color(1.0, 1.0, 1.0, 0.75))
+	gradient.set_color(1, Color(1.0, 1.0, 1.0, 0.0))
+	var ramp := GradientTexture1D.new()
+	ramp.gradient = gradient
+	_trail_process.color_ramp = ramp
+	_trail.process_material = _trail_process
+	var quad := QuadMesh.new()
+	quad.size = Vector2(0.42, 0.42)
+	_trail.draw_pass_1 = quad
+	var material := StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	material.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	material.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	material.billboard_keep_scale = true
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	material.vertex_color_use_as_albedo = true
+	material.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	var glow_gradient := Gradient.new()
+	glow_gradient.set_color(0, Color(1.0, 1.0, 1.0, 1.0))
+	glow_gradient.set_color(1, Color(1.0, 1.0, 1.0, 0.0))
+	var glow_texture := GradientTexture2D.new()
+	glow_texture.gradient = glow_gradient
+	glow_texture.fill = GradientTexture2D.FILL_RADIAL
+	glow_texture.fill_from = Vector2(0.5, 0.5)
+	glow_texture.fill_to = Vector2(1.0, 0.5)
+	glow_texture.width = 32
+	glow_texture.height = 32
+	material.albedo_texture = glow_texture
+	_trail.material_override = material
+	add_child(_trail)
+
+
 func _physics_process(delta: float) -> void:
 	_time_since_hit += delta
 	for key: Variant in _hit_cooldowns.keys():
 		_hit_cooldowns[key] = float(_hit_cooldowns[key]) - delta
+	_update_trail()
+
+
+func _update_trail() -> void:
+	if _trail == null:
+		return
+	var speed: float = linear_velocity.length()
+	var threshold: float = maxf(tuning.max_speed * 0.22, 9.0)
+	_trail.emitting = speed >= threshold
+	if _trail.emitting:
+		_trail.amount_ratio = clampf(speed / maxf(tuning.max_speed, 1.0), 0.18, 1.0)
 
 
 func _integrate_forces(ps: PhysicsDirectBodyState3D) -> void:

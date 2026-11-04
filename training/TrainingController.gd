@@ -16,6 +16,7 @@ const CAMERA_SCENE := preload("res://camera/ChaseCamera.tscn")
 const BASE_RULES := preload("res://match/MatchRules.tres")
 const BASE_CAR_TUNING := preload("res://car/CarTuning.tres")
 const BASE_BALL_TUNING := preload("res://ball/BallTuning.tres")
+const VFX_SERVICE := preload("res://vfx/VFXService.gd")
 const ARENA_LAYER := 1
 
 static var selected_pack_id: String = "onboarding"
@@ -25,6 +26,7 @@ var arena: Arena
 var car: Car
 var ball: Ball
 var camera: ChaseCamera
+var vfx: VFXService
 
 var pack: Dictionary = {}
 var drills: Array[DrillBase] = []
@@ -122,6 +124,10 @@ func _build_world() -> void:
 	add_child(car)
 	car.apply_cosmetics(Meta.profile.get("loadout", {}))
 	car.reset_to_kickoff(arena.get_spawn_transform(1, 1))
+	vfx = VFX_SERVICE.new() as VFXService
+	vfx.name = "VFX"
+	vfx.setup(self, arena)
+	add_child(vfx)
 	if not headless_mode:
 		camera = CAMERA_SCENE.instantiate() as ChaseCamera
 		add_child(camera)
@@ -351,6 +357,8 @@ func _on_ball_hit(strength: float, _position: Vector3, hitter_id: int) -> void:
 func _on_goal_scored(team: int, _scorer_id: int) -> void:
 	if running:
 		_scored_team = team
+	if ball != null:
+		Events.goal_explosion.emit(team, ball.global_position)
 
 
 func _on_car_state_changed(new_state: int) -> void:
