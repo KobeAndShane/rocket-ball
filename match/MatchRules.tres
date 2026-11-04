@@ -1,0 +1,36 @@
+[gd_resource type="Resource" script_class="MatchRules" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://match/MatchRules.gd" id="1_rules"]
+
+[resource]
+script = ExtResource("1_rules")
+mode_name = "Standard"
+team_size = 3
+match_duration = 300.0
+score_limit = 0
+overtime_enabled = true
+kickoff_countdown = 3.0
+goal_pause = 3.0
+replay_enabled = true
+replay_duration = 3.5
+fill_with_bots = true
+bot_tier = 1
+friendly_fire = false
+demolition_enabled = true
+gravity_interval = 30.0
+gravity_transition = 2.0
+gravity_warning = 5.0
+random_gravity = false
+gravity_strength = 20.0
+enabled_phases = Array[bool]([true, true, true, true])
+shift_refill_pulse = 15.0
+ball_radius_scale = 1.0
+ball_mass_scale = 1.0
+boost_pads_enabled = true
+no_boost = false
+unlimited_boost = false
+boost_pad_amount_small = 12.0
+boost_pad_amount_large = 100.0
+small_pad_respawn = 4.0
+large_pad_respawn = 10.0
+mutators = Array[Resource]([])

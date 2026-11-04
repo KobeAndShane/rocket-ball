@@ -1,0 +1,52 @@
+[gd_scene load_steps=9 format=3]
+
+[ext_resource type="Script" path="res://car/Car.gd" id="1_car"]
+[ext_resource type="Script" path="res://car/BoostComponent.gd" id="2_boost"]
+[ext_resource type="Resource" path="res://car/CarTuning.tres" id="3_tuning"]
+
+[sub_resource type="BoxShape3D" id="BoxShape_car"]
+size = Vector3(1.9, 0.68, 3.4)
+
+[sub_resource type="PhysicsMaterial" id="PhysicsMaterial_car"]
+friction = 0.08
+bounce = 0.0
+
+[sub_resource type="BoxMesh" id="BoxMesh_body"]
+size = Vector3(1.86, 0.52, 3.3)
+
+[sub_resource type="BoxMesh" id="BoxMesh_cabin"]
+size = Vector3(1.42, 0.42, 1.55)
+
+[sub_resource type="StandardMaterial3D" id="Material_placeholder"]
+albedo_color = Color(0.2, 0.64, 1, 1)
+metallic = 0.4
+roughness = 0.35
+
+[node name="Car" type="RigidBody3D"]
+mass = 180.0
+physics_material_override = SubResource("PhysicsMaterial_car")
+gravity_scale = 0.0
+can_sleep = false
+continuous_cd = true
+contact_monitor = true
+max_contacts_reported = 8
+collision_layer = 2
+collision_mask = 23
+script = ExtResource("1_car")
+tuning = ExtResource("3_tuning")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+shape = SubResource("BoxShape_car")
+
+[node name="BodyMesh" type="MeshInstance3D" parent="."]
+position = Vector3(0, -0.02, 0)
+mesh = SubResource("BoxMesh_body")
+material_override = SubResource("Material_placeholder")
+
+[node name="CabinMesh" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.4, 0.15)
+mesh = SubResource("BoxMesh_cabin")
+material_override = SubResource("Material_placeholder")
+
+[node name="BoostComponent" type="Node" parent="."]
+script = ExtResource("2_boost")

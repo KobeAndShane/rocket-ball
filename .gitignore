@@ -1,0 +1,19 @@
+# Godot
+.godot/
+*.translation
+export/
+build/
+dist/
+
+# Local user data / captures
+*.log
+*.tmp
+*.bak
+*.csv.tmp
+screenshots/
+captures/
+
+# OS
+Thumbs.db
+.DS_Store
+desktop.ini

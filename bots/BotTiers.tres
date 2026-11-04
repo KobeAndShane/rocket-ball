@@ -1,0 +1,47 @@
+[gd_resource type="Resource" script_class="BotTiers" load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://bots/BotTiers.gd" id="1_tiers"]
+[ext_resource type="Script" path="res://bots/BotTier.gd" id="2_tier"]
+
+[sub_resource type="Resource" id="Tier_rookie"]
+script = ExtResource("2_tier")
+display_name = "Rookie"
+update_hz = 8.0
+reaction_delay = 0.35
+aim_error = 0.32
+boost_use = 0.25
+prediction_time = 0.25
+aerial_skill = 0.1
+aggression = 0.45
+speed_scale = 0.72
+defend_bias = 0.6
+
+[sub_resource type="Resource" id="Tier_pro"]
+script = ExtResource("2_tier")
+display_name = "Pro"
+update_hz = 30.0
+reaction_delay = 0.07
+aim_error = 0.07
+boost_use = 0.9
+prediction_time = 0.85
+aerial_skill = 0.7
+aggression = 0.7
+speed_scale = 1.0
+defend_bias = 0.4
+
+[sub_resource type="Resource" id="Tier_allstar"]
+script = ExtResource("2_tier")
+display_name = "All-Star"
+update_hz = 40.0
+reaction_delay = 0.03
+aim_error = 0.035
+boost_use = 1.0
+prediction_time = 1.05
+aerial_skill = 0.95
+aggression = 0.8
+speed_scale = 1.0
+defend_bias = 0.3
+
+[resource]
+script = ExtResource("1_tiers")
+tiers = Array[Resource]([SubResource("Tier_rookie"), SubResource("Tier_pro"), SubResource("Tier_allstar")])
