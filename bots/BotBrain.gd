@@ -6,6 +6,7 @@ extends Node
 const BOT_TIERS := preload("res://bots/BotTiers.tres")
 
 enum Mode { KICKOFF, CHASE, DEFEND, GRAB_BOOST, ROTATE_BACK, AERIAL }
+enum Role { STRIKER, SUPPORT, GOALIE }
 
 @export var tier: BotTier
 
@@ -16,6 +17,7 @@ var allies: Array[Car] = []
 var opponents: Array[Car] = []
 
 var mode: Mode = Mode.CHASE
+var role: Role = Role.STRIKER
 var _input := CarInput.new()
 var _target := Vector3.ZERO
 var _decision_timer: float = 0.0
@@ -23,6 +25,7 @@ var _jump_cooldown: float = 0.0
 var _want_jump: bool = false
 var _rng := RandomNumberGenerator.new()
 var _last_ball_pos := Vector3.ZERO
+var _ball_history: Array[Vector3] = []
 
 
 func setup(car_ref: Car, ball_ref: Ball, arena_ref: Arena, tier_ref: BotTier, allies_ref: Array[Car], opponents_ref: Array[Car]) -> void:
@@ -35,12 +38,16 @@ func setup(car_ref: Car, ball_ref: Ball, arena_ref: Arena, tier_ref: BotTier, al
 	_rng.seed = 9187 + car.car_id * 7919
 	_last_ball_pos = ball.global_position if ball != null else Vector3.ZERO
 	_decision_timer = _rng.randf_range(0.0, 0.1)
+	_ball_history.clear()
 	car.control_mode = Car.DriveMode.BOT
 
 
 func _physics_process(delta: float) -> void:
 	if car == null or ball == null or arena == null:
 		return
+	_ball_history.append(ball.global_position)
+	while _ball_history.size() > 180:
+		_ball_history.pop_front()
 	if car.frozen or car.state == Car.State.DEMOLISHED:
 		return
 	_jump_cooldown = maxf(0.0, _jump_cooldown - delta)
@@ -53,24 +60,29 @@ func _physics_process(delta: float) -> void:
 
 
 func _decide() -> void:
-	var predicted := _predict_ball()
+	var perceived := _delayed_ball_position()
+	var predicted := _predict_ball_from(perceived)
 	var ball_delta: Vector3 = predicted - car.global_position
 	var up: Vector3 = GravityManager.up
 	var height: float = ball_delta.dot(up)
 	var flat_dist: float = (ball_delta - up * height).length()
 	var own_goal := _own_goal()
 	var closest := _is_closest_to_ball(predicted)
+	_update_role(predicted)
 	_want_jump = false
 	var target := predicted
 	var new_mode := Mode.CHASE
 
-	if car.boost_component != null and car.boost_component.amount < 18.0 and not closest:
-		var pad := _nearest_pad()
-		if pad != null:
-			target = pad.global_position
-			new_mode = Mode.GRAB_BOOST
-
-	if not closest and new_mode != Mode.GRAB_BOOST:
+	if role == Role.GOALIE and own_goal != null:
+		var to_ball: Vector3 = (ball.global_position - own_goal.global_position).normalized()
+		target = own_goal.global_position + to_ball * (8.0 + tier.defend_bias * 5.0)
+		new_mode = Mode.DEFEND
+	elif role == Role.SUPPORT and own_goal != null:
+		var mid: Vector3 = ball.global_position.lerp(own_goal.global_position, 0.35)
+		var lateral: Vector3 = up.cross(ball.global_position - car.global_position).normalized()
+		target = mid + lateral * (5.0 + tier.defend_bias * 3.0)
+		new_mode = Mode.ROTATE_BACK
+	elif not closest and new_mode != Mode.GRAB_BOOST:
 		if own_goal != null:
 			var to_ball: Vector3 = (ball.global_position - own_goal.global_position).normalized()
 			target = own_goal.global_position + to_ball * (9.0 + tier.defend_bias * 5.0)
@@ -82,6 +94,12 @@ func _decide() -> void:
 		if dist_own_goal < 16.0 and ball_delta.dot(own_goal.global_position - car.global_position) > 0.0:
 			new_mode = Mode.DEFEND
 			target = predicted
+
+	if car.boost_component != null and car.boost_component.amount < 18.0 and not closest and role != Role.GOALIE:
+		var pad := _nearest_pad()
+		if pad != null:
+			target = pad.global_position
+			new_mode = Mode.GRAB_BOOST
 
 	# Aerial attempt when the ball is above the drivable plane and close.
 	if height > 3.2 and flat_dist < 13.0 and tier.aerial_skill > 0.15:
@@ -105,10 +123,71 @@ func _decide() -> void:
 	mode = new_mode
 
 
+func _delayed_ball_position() -> Vector3:
+	var delay: float = maxf(tier.reaction_delay, 0.0)
+	if delay <= 0.001 or _ball_history.is_empty():
+		return ball.global_position
+	var ticks: int = int(round(delay * 120.0))
+	var idx: int = clampi(_ball_history.size() - 1 - ticks, 0, _ball_history.size() - 1)
+	return _ball_history[idx]
+
+
+func _update_role(predicted: Vector3) -> void:
+	var team: Array[Car] = [car]
+	for ally: Car in allies:
+		if ally != car and ally.state != Car.State.DEMOLISHED:
+			team.append(ally)
+	var own_goal := _own_goal()
+	if own_goal == null or team.size() == 1:
+		role = Role.STRIKER
+		return
+	var striker: Car = team[0]
+	var goalie: Car = team[0]
+	var best_ball: float = 1e20
+	var best_goal: float = 1e20
+	for member: Car in team:
+		var d_ball: float = member.global_position.distance_squared_to(predicted)
+		if d_ball < best_ball:
+			best_ball = d_ball
+			striker = member
+		var d_goal: float = member.global_position.distance_squared_to(own_goal.global_position)
+		if d_goal < best_goal:
+			best_goal = d_goal
+			goalie = member
+	if car == striker:
+		role = Role.STRIKER
+	elif car == goalie:
+		role = Role.GOALIE
+	else:
+		role = Role.SUPPORT
+
+
+func role_name() -> String:
+	return ["STRIKER", "SUPPORT", "GOALIE"][role]
+
+
 func _predict_ball() -> Vector3:
-	var t: float = clampf(car.global_position.distance_to(ball.global_position) / 38.0, 0.08, tier.prediction_time)
+	return _predict_ball_from(_delayed_ball_position())
+
+
+func _predict_ball_from(origin: Vector3) -> Vector3:
+	var t: float = clampf(car.global_position.distance_to(origin) / 38.0, 0.08, tier.prediction_time)
 	var g: Vector3 = GravityManager.gravity_dir * GravityManager.gravity_strength
-	var p: Vector3 = ball.global_position + ball.linear_velocity * t + 0.5 * g * t * t
+	var p: Vector3 = origin + ball.linear_velocity * t
+	# If a shift lands inside the prediction window, integrate in two segments
+	# with the blended gravity. This is what makes wall/ceiling reads work.
+	var time_to_shift: float = GravityManager.time_until_shift()
+	if GravityManager.active and not GravityManager.transitioning and time_to_shift < t:
+		var first: float = maxf(time_to_shift, 0.0)
+		p = origin + ball.linear_velocity * first + 0.5 * g * first * first
+		var v2: Vector3 = ball.linear_velocity + g * first
+		var remaining: float = t - first
+		var new_g: Vector3 = GravityManager.next_direction() * GravityManager.gravity_strength
+		var blend: float = clampf(remaining / maxf(GravityManager.transition_duration, 0.01), 0.0, 1.0)
+		var average_g: Vector3 = g.lerp(new_g, blend)
+		p += v2 * remaining + 0.5 * average_g * remaining * remaining
+	else:
+		p += 0.5 * g * t * t
 	return _clamp_inside(p)
 
 

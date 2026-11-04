@@ -43,6 +43,7 @@ func _run_all() -> void:
 	await _test_free_play_spawn()
 	await _test_match_timer_and_overtime()
 	await _test_demo_respawn()
+	await _test_bots()
 	await _test_rank_helpers()
 	await _test_car_settles_on_floor()
 
@@ -428,6 +429,53 @@ func _test_demo_respawn() -> void:
 
 
 # --- 11 / meta ---------------------------------------------------------------
+
+func _test_bots() -> void:
+	_begin("Bots")
+	var rules := RULES.duplicate() as MatchRules
+	rules.team_size = 3
+	rules.fill_with_bots = true
+	rules.kickoff_countdown = 0.1
+	rules.gravity_interval = 2.0
+	rules.gravity_transition = 0.2
+	rules.gravity_warning = 0.5
+	rules.replay_enabled = false
+	var scene := MATCH_SCENE.instantiate() as MatchController
+	scene.auto_start = true
+	scene.headless_mode = true
+	scene.spawn_hud = false
+	scene.spawn_camera = false
+	scene.all_bots = true
+	scene.rules = rules
+	_track(scene)
+	add_child(scene)
+	await _frames(3)
+	_check(scene.cars.size() == 6, "bot match spawns six cars")
+	var brains: Array[BotBrain] = []
+	for car: Car in scene.cars:
+		var brain := car.get_node_or_null("BotBrain") as BotBrain
+		if brain != null:
+			brains.append(brain)
+	_check(brains.size() == 6, "every car has a bot brain", "brains=%d" % brains.size())
+	await _frames(240)
+	var roles_ok := true
+	var targets_ok := true
+	for brain: BotBrain in brains:
+		if brain.role < 0 or brain.role > 2:
+			roles_ok = false
+		if not scene.arena.is_position_inside(brain._target, 2.0):
+			targets_ok = false
+	_check(roles_ok, "bots assign striker/support/goalie roles")
+	_check(targets_ok, "bot targets stay inside the arena")
+	var started := false
+	for car: Car in scene.cars:
+		if car.global_position.distance_to(car.spawn_transform.origin) > 1.0:
+			started = true
+			break
+	_check(started, "bots leave their spawn and drive")
+	_check(scene.ball.global_position.length() < 100.0, "ball remains simulated")
+	await _cleanup()
+
 
 func _test_rank_helpers() -> void:
 	_begin("Rank helpers")
