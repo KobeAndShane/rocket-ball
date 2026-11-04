@@ -21,6 +21,14 @@ extends Resource
 @export var unstuck_time: float = 5.0
 @export var arena_theme_index: int = 0
 
+@export_group("Matchmaking")
+@export var ranked: bool = false
+@export var match_id: String = ""
+@export var region: String = "auto"
+@export var team_mmr: float = 1000.0
+@export var opponent_mmr: float = 1000.0
+@export var opponent_rd: float = 200.0
+
 @export_group("Gravity")
 @export var gravity_interval: float = 30.0
 @export var gravity_transition: float = 2.0

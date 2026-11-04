@@ -95,6 +95,11 @@ func _ready() -> void:
 
 
 func _exit_tree() -> void:
+	# Leaving a live ranked match counts as an abandon. Completed matches are in
+	# POSTGAME and are never penalised, including the normal scene teardown.
+	if rules != null and rules.ranked and local_car != null and not _recorded:
+		if state == State.PLAYING or state == State.OVERTIME:
+			Meta.register_abandon()
 	_disconnect_events()
 	if _online:
 		if NetManager.snapshot_received.is_connected(_on_net_snapshot):
@@ -730,7 +735,8 @@ func _end_match() -> void:
 		var other_score: int = score2 if local_team == 1 else score1
 		local_stats["score_diff"] = team_score - other_score
 		local_stats["mvp"] = 1 if int(summary.get("mvp_id", -1)) == local_car.car_id else 0
-		Meta.record_match(winner == local_team, local_stats, float(Meta.profile["mmr"]), float(Meta.profile["mmr"]))
+		var opponent: float = rules.opponent_mmr if rules.ranked else -1.0
+		Meta.record_match(winner == local_team, local_stats, opponent, rules.opponent_rd, rules.ranked)
 	if _online and NetManager.is_server:
 		NetManager.broadcast_event("postgame", summary)
 
@@ -1022,7 +1028,8 @@ func _apply_network_postgame(summary: Dictionary) -> void:
 	var other_score: int = score2 if local_team == 1 else score1
 	local_stats["score_diff"] = team_score - other_score
 	local_stats["mvp"] = 1 if int(summary.get("mvp_id", -1)) == local_car.car_id else 0
-	Meta.record_match(winner == local_team, local_stats, float(Meta.profile["mmr"]), float(Meta.profile["mmr"]))
+	var opponent: float = rules.opponent_mmr if rules.ranked else -1.0
+	Meta.record_match(winner == local_team, local_stats, opponent, rules.opponent_rd, rules.ranked)
 
 
 func _on_net_peer_connected(peer_id: int) -> void:

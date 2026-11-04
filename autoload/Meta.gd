@@ -1,11 +1,16 @@
 extends Node
-## Local player profile, progression, cosmetics, challenges and Elo ranking.
-## Save format is versioned JSON; backend sync (Task 11) mirrors this shape.
+## Local player profile, progression, cosmetics, challenges and Glicko-2 ranking.
+## Save format is versioned JSON; the backend mirror uses the same shape.
 
 const SAVE_PATH := "user://profile.json"
-const SAVE_VERSION := 2
+const SAVE_VERSION := 3
 const RANK_TIERS := ["Bronze", "Silver", "Gold", "Platinum", "Diamond", "Champion", "Grand Champion"]
 const TIER_SIZE := 300
+const PLACEMENT_MATCHES := 10
+const SEASON_LENGTH_SECONDS := 90.0 * 24.0 * 60.0 * 60.0
+const LEAVER_COOLDOWNS: Array[float] = [300.0, 900.0, 3600.0]
+const ABANDON_PENALTY := 25.0
+const SMURF_RISK_THRESHOLD := 0.6
 
 var profile: Dictionary = {}
 var daily_challenges: Array[Dictionary] = []
@@ -17,6 +22,9 @@ func _ready() -> void:
 	_build_catalog()
 	_default_profile()
 	load_profile()
+	if float(profile.get("season_started", 0.0)) <= 0.0:
+		profile["season_started"] = Time.get_unix_time_from_system()
+	check_season_rollover()
 	_ensure_challenges()
 	Events.goal_scored.connect(_on_goal_scored)
 	Events.car_demolished.connect(_on_car_demolished)
@@ -41,9 +49,25 @@ func _default_profile() -> void:
 		"playtime": 0.0,
 		"mmr": 1000.0,
 		"peak_mmr": 1000.0,
+		"rd": 350.0,
+		"volatility": 0.06,
 		"placement_matches": 0,
+		"ranked_matches": 0,
+		"ranked_wins": 0,
+		"casual_matches": 0,
+		"casual_wins": 0,
+		"last_mmr_delta": 0.0,
+		"smurf_risk": 0.0,
+		"leaver_count": 0,
+		"abandon_count": 0,
+		"leaver_cooldown_until": 0.0,
 		"season": 1,
+		"season_started": 0.0,
 		"season_xp": 0,
+		"season_matches": 0,
+		"season_wins": 0,
+		"season_peak_mmr": 1000.0,
+		"season_history": [],
 		"premium_pass": false,
 		"credits": 500,
 		"inventory": ["body_stock", "wheel_stock", "boost_standard", "decal_none", "explosion_standard", "antenna_none"],
@@ -121,6 +145,26 @@ func _migrate(data: Dictionary) -> void:
 		data["season_rewards_claimed"] = []
 		data["challenge_progress"] = {}
 		data["challenges_date"] = ""
+	if version < 3:
+		# Elo-era saves become Glicko-2 ratings. Established players keep a
+		# tighter RD than players who have not finished placements.
+		var placements: int = int(data.get("placement_matches", 0))
+		data["rd"] = 200.0 if placements >= PLACEMENT_MATCHES else 350.0
+		data["volatility"] = 0.06
+		data["ranked_matches"] = placements
+		data["ranked_wins"] = int(data.get("wins", 0))
+		data["casual_matches"] = 0
+		data["casual_wins"] = 0
+		data["last_mmr_delta"] = 0.0
+		data["smurf_risk"] = 0.0
+		data["leaver_count"] = 0
+		data["abandon_count"] = 0
+		data["leaver_cooldown_until"] = 0.0
+		data["season_started"] = Time.get_unix_time_from_system()
+		data["season_matches"] = 0
+		data["season_wins"] = 0
+		data["season_peak_mmr"] = float(data.get("peak_mmr", data.get("mmr", 1000.0)))
+		data["season_history"] = []
 	data["version"] = SAVE_VERSION
 
 
@@ -172,19 +216,34 @@ func add_credits(amount: int) -> void:
 
 
 ## Record a finished match. `stats` follows the StatsCollector dictionary shape.
-func record_match(won: bool, stats: Dictionary, team_mmr: float = -1.0, opponent_mmr: float = -1.0) -> Dictionary:
+## `opponent_mmr < 0` records an unrated match (free play, private or casual).
+func record_match(won: bool, stats: Dictionary, opponent_mmr: float = -1.0, opponent_rd: float = 200.0, ranked: bool = true) -> Dictionary:
 	profile["matches"] = int(profile["matches"]) + 1
 	if won:
 		profile["wins"] = int(profile["wins"]) + 1
 	else:
 		profile["losses"] = int(profile["losses"]) + 1
+	if ranked:
+		profile["ranked_matches"] = int(profile.get("ranked_matches", 0)) + 1
+		if won:
+			profile["ranked_wins"] = int(profile.get("ranked_wins", 0)) + 1
+	else:
+		profile["casual_matches"] = int(profile.get("casual_matches", 0)) + 1
+		if won:
+			profile["casual_wins"] = int(profile.get("casual_wins", 0)) + 1
 	for key: String in ["goals", "saves", "assists", "shots", "demolitions"]:
 		profile[key] = int(profile[key]) + int(stats.get(key, 0))
 	profile["boost_used"] = float(profile["boost_used"]) + float(stats.get("boost_used", 0.0))
 	profile["playtime"] = float(profile["playtime"]) + float(stats.get("playtime", 0.0))
-	var mmr_result := {"delta": 0.0, "mmr": float(profile["mmr"]), "placed": int(profile["placement_matches"]) >= 10}
-	if team_mmr >= 0.0 and opponent_mmr >= 0.0:
-		mmr_result = apply_rated_result(won, team_mmr, opponent_mmr, float(stats.get("score_diff", 0)))
+	var mmr_result := {
+		"delta": 0.0,
+		"mmr": float(profile["mmr"]),
+		"rd": float(profile.get("rd", 200.0)),
+		"placed": int(profile["placement_matches"]) >= PLACEMENT_MATCHES,
+		"rank": rank_name(),
+	}
+	if ranked and opponent_mmr >= 0.0:
+		mmr_result = apply_rated_result(won, opponent_mmr, opponent_rd, float(stats.get("score_diff", 0)))
 	var xp_gain: int = 400 + int(stats.get("goals", 0)) * 120 + int(stats.get("saves", 0)) * 60 + int(stats.get("assists", 0)) * 40
 	if won:
 		xp_gain += 250
@@ -198,44 +257,227 @@ func record_match(won: bool, stats: Dictionary, team_mmr: float = -1.0, opponent
 	return {"xp": xp_gain, "mmr": mmr_result}
 
 
-func apply_rated_result(won: bool, team_mmr: float, opponent_mmr: float, score_diff: float = 0.0) -> Dictionary:
-	var placements: int = int(profile["placement_matches"])
-	var k: float = 40.0
-	if placements >= 10:
-		k = 24.0 if int(profile["matches"]) < 30 else 16.0
-	else:
-		k = 48.0
-	var expected: float = 1.0 / (1.0 + pow(10.0, (opponent_mmr - team_mmr) / 400.0))
-	var actual: float = 1.0 if won else 0.0
-	var margin: float = clampf(1.0 + absf(score_diff) * 0.06, 1.0, 1.5)
-	var delta: float = k * (actual - expected) * margin
-	profile["mmr"] = maxf(0.0, float(profile["mmr"]) + delta)
-	profile["peak_mmr"] = maxf(float(profile["peak_mmr"]), float(profile["mmr"]))
-	if placements < 10:
-		profile["placement_matches"] = placements + 1
-	Events.notification.emit("MMR %+d" % int(round(delta)))
+## Glicko-2 rated result. Placements use the naturally high starting RD rather
+## than a special K-factor, so uncertainty shrinks match by match.
+func apply_rated_result(won: bool, opponent_mmr: float, opponent_rd: float = 200.0, score_diff: float = 0.0) -> Dictionary:
+	var old_rating: float = float(profile["mmr"])
+	var glicko := Glicko2.new(
+		old_rating,
+		float(profile.get("rd", 350.0)),
+		float(profile.get("volatility", 0.06)),
+	)
+	var score: float = 1.0 if won else 0.0
+	var result: Dictionary = glicko.update(opponent_mmr, opponent_rd, score)
+	var margin: float = clampf(1.0 + absf(score_diff) * 0.02, 1.0, 1.25)
+	var delta: float = float(result["delta"]) * margin
+	if won:
+		delta *= smurf_multiplier()
+	var new_rating: float = clampf(old_rating + delta, Glicko2.MIN_RATING, Glicko2.MAX_RATING)
+	delta = new_rating - old_rating
+	profile["mmr"] = new_rating
+	profile["rd"] = glicko.rd
+	profile["volatility"] = glicko.volatility
+	profile["last_mmr_delta"] = delta
+	profile["peak_mmr"] = maxf(float(profile["peak_mmr"]), new_rating)
+	profile["season_peak_mmr"] = maxf(float(profile.get("season_peak_mmr", new_rating)), new_rating)
+	profile["season_matches"] = int(profile.get("season_matches", 0)) + 1
+	if won:
+		profile["season_wins"] = int(profile.get("season_wins", 0)) + 1
+	_update_smurf_risk(won, score_diff)
+	var placements_before: int = int(profile["placement_matches"])
+	if placements_before < PLACEMENT_MATCHES:
+		profile["placement_matches"] = placements_before + 1
+		if placements_before + 1 == PLACEMENT_MATCHES:
+			Events.notification.emit("Placements complete - %s" % rank_for_mmr(new_rating))
+	Events.notification.emit("MMR %+d   RD %d" % [int(round(delta)), int(round(glicko.rd))])
 	save_profile()
 	return {
 		"delta": delta,
-		"mmr": float(profile["mmr"]),
-		"placed": int(profile["placement_matches"]) >= 10,
+		"mmr": new_rating,
+		"rd": glicko.rd,
+		"volatility": glicko.volatility,
+		"placed": int(profile["placement_matches"]) >= PLACEMENT_MATCHES,
+		"placement_matches": int(profile["placement_matches"]),
 		"rank": rank_name(),
+		"smurf_risk": float(profile.get("smurf_risk", 0.0)),
 	}
 
 
+## New accounts that win by large margins climb faster so they leave the
+## beginner pool quickly instead of farming it.
+func _update_smurf_risk(won: bool, score_diff: float) -> void:
+	var ranked_matches: int = int(profile.get("ranked_matches", 0))
+	var risk: float = float(profile.get("smurf_risk", 0.0))
+	if ranked_matches > 20:
+		risk = maxf(0.0, risk - 0.05)
+	elif won:
+		risk += 0.06
+		if absf(score_diff) >= 3.0:
+			risk += 0.05
+		if int(profile.get("placement_matches", 0)) < PLACEMENT_MATCHES:
+			risk += 0.03
+	else:
+		risk = maxf(0.0, risk - 0.04)
+	profile["smurf_risk"] = clampf(risk, 0.0, 1.0)
+
+
+func smurf_multiplier() -> float:
+	return 1.0 + float(profile.get("smurf_risk", 0.0)) * 0.5
+
+
+func is_flagged_smurf() -> bool:
+	return float(profile.get("smurf_risk", 0.0)) >= SMURF_RISK_THRESHOLD
+
+
+func placement_remaining() -> int:
+	return maxi(0, PLACEMENT_MATCHES - int(profile.get("placement_matches", 0)))
+
+
 func rank_name() -> String:
+	if int(profile.get("placement_matches", 0)) < PLACEMENT_MATCHES:
+		return "Unranked"
 	return rank_for_mmr(float(profile["mmr"]))
 
 
 static func rank_for_mmr(mmr: float) -> String:
 	if mmr < 0.0:
 		return "Unranked"
-	var tier_idx: int = clampi(int(mmr / TIER_SIZE), 0, RANK_TIERS.size() - 1)
-	var within: float = mmr - tier_idx * TIER_SIZE
-	var division: int = clampi(1 + int(within / (TIER_SIZE / 3.0)), 1, 3)
+	var tier_idx: int = tier_index_for_mmr(mmr)
+	var division: int = division_for_mmr(mmr)
 	if tier_idx == RANK_TIERS.size() - 1:
 		return RANK_TIERS[tier_idx]
 	return "%s %d" % [RANK_TIERS[tier_idx], division]
+
+
+static func tier_index_for_mmr(mmr: float) -> int:
+	if mmr < 0.0:
+		return -1
+	return clampi(int(mmr / TIER_SIZE), 0, RANK_TIERS.size() - 1)
+
+
+static func division_for_mmr(mmr: float) -> int:
+	if mmr < 0.0:
+		return 0
+	var tier_idx: int = tier_index_for_mmr(mmr)
+	var within: float = mmr - tier_idx * TIER_SIZE
+	return clampi(1 + int(within / (TIER_SIZE / 3.0)), 1, 3)
+
+
+func rank_progress() -> Dictionary:
+	var mmr: float = float(profile["mmr"])
+	var tier_idx: int = tier_index_for_mmr(mmr)
+	var within: float = mmr - tier_idx * TIER_SIZE
+	var next_label: String = rank_for_mmr(mmr)
+	if tier_idx < RANK_TIERS.size() - 1 and division_for_mmr(mmr) < 3:
+		next_label = "%s %d" % [RANK_TIERS[tier_idx], division_for_mmr(mmr) + 1]
+	elif tier_idx < RANK_TIERS.size() - 1:
+		next_label = "%s 1" % RANK_TIERS[tier_idx + 1]
+	else:
+		next_label = "Grand Champion"
+	return {
+		"tier_index": tier_idx,
+		"tier": RANK_TIERS[tier_idx],
+		"division": division_for_mmr(mmr),
+		"mmr_into_tier": within,
+		"tier_size": TIER_SIZE,
+		"next": next_label,
+		"unranked": int(profile.get("placement_matches", 0)) < PLACEMENT_MATCHES,
+	}
+
+
+# --- Seasons / leaver / queue gating -----------------------------------------
+
+func season_ends_at() -> float:
+	return float(profile.get("season_started", 0.0)) + SEASON_LENGTH_SECONDS
+
+
+func season_time_left(now: float = -1.0) -> float:
+	var ts: float = now if now >= 0.0 else Time.get_unix_time_from_system()
+	return maxf(0.0, season_ends_at() - ts)
+
+
+## Starts the next season with a soft MMR reset (halfway back to 1000),
+## fresh placements and expanded uncertainty.
+func start_new_season(now: float = -1.0) -> Dictionary:
+	var ts: float = now if now >= 0.0 else Time.get_unix_time_from_system()
+	var old_mmr: float = float(profile["mmr"])
+	var new_mmr: float = 1000.0 + (old_mmr - 1000.0) * 0.5
+	var history: Array = profile.get("season_history", [])
+	history.append({
+		"season": int(profile.get("season", 1)),
+		"mmr": old_mmr,
+		"peak_mmr": float(profile.get("season_peak_mmr", old_mmr)),
+		"matches": int(profile.get("season_matches", 0)),
+		"wins": int(profile.get("season_wins", 0)),
+		"ended": ts,
+	})
+	while history.size() > 10:
+		history.pop_front()
+	profile["season_history"] = history
+	profile["season"] = int(profile.get("season", 1)) + 1
+	profile["season_started"] = ts
+	profile["season_matches"] = 0
+	profile["season_wins"] = 0
+	profile["season_xp"] = 0
+	profile["season_peak_mmr"] = new_mmr
+	profile["placement_matches"] = 0
+	profile["mmr"] = new_mmr
+	profile["rd"] = clampf(float(profile.get("rd", 200.0)) * 1.8, 150.0, 350.0)
+	profile["smurf_risk"] = 0.0
+	save_profile()
+	Events.notification.emit("Season %d started - soft reset to %.0f MMR" % [int(profile["season"]), new_mmr])
+	return {
+		"season": int(profile["season"]),
+		"old_mmr": old_mmr,
+		"new_mmr": new_mmr,
+		"rd": float(profile["rd"]),
+	}
+
+
+## Rolls over automatically when the 90-day season window expires.
+func check_season_rollover(now: float = -1.0) -> bool:
+	var ts: float = now if now >= 0.0 else Time.get_unix_time_from_system()
+	if float(profile.get("season_started", ts)) <= 0.0:
+		profile["season_started"] = ts
+		return false
+	if ts < season_ends_at():
+		return false
+	start_new_season(ts)
+	return true
+
+
+## Abandoning a ranked match applies a rating penalty, raises uncertainty and
+## escalates the queue cooldown (5 min / 15 min / 60 min).
+func register_abandon(now: float = -1.0) -> float:
+	var ts: float = now if now >= 0.0 else Time.get_unix_time_from_system()
+	var count: int = int(profile.get("abandon_count", 0)) + 1
+	profile["abandon_count"] = count
+	profile["leaver_count"] = int(profile.get("leaver_count", 0)) + 1
+	var cooldown: float = LEAVER_COOLDOWNS[clampi(count - 1, 0, LEAVER_COOLDOWNS.size() - 1)]
+	profile["leaver_cooldown_until"] = ts + cooldown
+	profile["mmr"] = maxf(0.0, float(profile["mmr"]) - ABANDON_PENALTY)
+	profile["rd"] = clampf(float(profile.get("rd", 200.0)) + 30.0, Glicko2.MIN_RD, Glicko2.MAX_RD)
+	profile["last_mmr_delta"] = -ABANDON_PENALTY
+	save_profile()
+	Events.notification.emit("Match abandoned - queue locked for %d min" % int(cooldown / 60.0))
+	return cooldown
+
+
+func leaver_cooldown_remaining(now: float = -1.0) -> float:
+	var ts: float = now if now >= 0.0 else Time.get_unix_time_from_system()
+	return maxf(0.0, float(profile.get("leaver_cooldown_until", 0.0)) - ts)
+
+
+func can_queue(now: float = -1.0) -> bool:
+	return leaver_cooldown_remaining(now) <= 0.0
+
+
+## Called on reconnect after a grace-period disconnect; the next abandon
+## escalates while a clean match completion forgives one strike.
+func forgive_abandon() -> void:
+	profile["abandon_count"] = maxi(0, int(profile.get("abandon_count", 0)) - 1)
+	profile["leaver_cooldown_until"] = 0.0
+	save_profile()
 
 
 func owned_cosmetics() -> Array:
@@ -353,4 +595,5 @@ func _on_car_demolished(_victim: int, _attacker: int) -> void:
 
 func reset_profile() -> void:
 	_default_profile()
+	profile["season_started"] = Time.get_unix_time_from_system()
 	save_profile()

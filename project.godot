@@ -17,6 +17,7 @@ Settings="*res://autoload/Settings.gd"
 GravityManager="*res://autoload/GravityManager.gd"
 NetManager="*res://autoload/NetManager.gd"
 Meta="*res://autoload/Meta.gd"
+Matchmaking="*res://matchmaking/MatchmakingService.gd"
 
 [display]
 

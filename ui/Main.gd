@@ -10,6 +10,7 @@ var status_label: Label
 var _updating: bool = false
 var _match: MatchController
 var _mode_description: Label
+var _queue_status: Label
 
 
 func _ready() -> void:
@@ -24,6 +25,9 @@ func _ready() -> void:
 	Events.notification.connect(_on_notification)
 	Events.player_joined.connect(func(_id: int, _name: String) -> void: _refresh_online())
 	Events.player_left.connect(func(_id: int) -> void: _refresh_online())
+	Matchmaking.queue_changed.connect(_on_queue_changed)
+	Matchmaking.queue_progress.connect(_on_queue_progress)
+	Matchmaking.match_found.connect(_on_matchmaking_found)
 	_refresh_profile()
 	_show_home()
 
@@ -145,6 +149,8 @@ func _on_notification(text: String) -> void:
 
 func _clear_content() -> void:
 	content.remove_meta("online")
+	content.remove_meta("ranked")
+	_queue_status = null
 	for child in content.get_children():
 		child.queue_free()
 
@@ -395,29 +401,123 @@ func _challenge_row(entry: Dictionary) -> Control:
 
 func _show_ranked() -> void:
 	_clear_content()
-	content.add_child(_heading("RANKED"))
-	var placed: int = int(Meta.profile.get("placement_matches", 0))
-	content.add_child(_body("Season %d   MMR %d   Peak %d\nRank: %s\nPlacement matches: %d / 10" % [
-		int(Meta.profile.get("season", 1)),
+	content.set_meta("ranked", true)
+	content.add_child(_heading("COMPETITIVE"))
+	var progress := Meta.rank_progress()
+	var identity := HBoxContainer.new()
+	identity.add_theme_constant_override("separation", 16)
+	var icon := RankIcon.new()
+	icon.setup(maxi(int(progress["tier_index"]), 0), int(progress["division"]), 62.0)
+	identity.add_child(icon)
+	var identity_text := VBoxContainer.new()
+	identity_text.add_theme_constant_override("separation", 1)
+	identity_text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var rank_color: Color = RankIcon.color_for_tier(int(progress["tier_index"]))
+	identity_text.add_child(_label(Meta.rank_name(), 26, rank_color))
+	identity_text.add_child(_label("MMR %d   RD +/-%d   Peak %d" % [
 		int(Meta.profile.get("mmr", 1000)),
+		int(round(float(Meta.profile.get("rd", 350.0)))),
 		int(Meta.profile.get("peak_mmr", 1000)),
-		Meta.rank_name(),
-		mini(placed, 10),
-	]))
+	], 15, Color(0.72, 0.82, 0.95)))
+	identity.add_child(identity_text)
+	content.add_child(identity)
+	var place_left := Meta.placement_remaining()
+	var season_line := "Season %d   %d days left   %d matches   %d wins" % [
+		int(Meta.profile.get("season", 1)),
+		int(ceil(Meta.season_time_left() / 86400.0)),
+		int(Meta.profile.get("season_matches", 0)),
+		int(Meta.profile.get("season_wins", 0)),
+	]
+	content.add_child(_body(season_line))
+	if place_left > 0:
+		var done: int = Meta.PLACEMENT_MATCHES - place_left
+		content.add_child(_label("PLACEMENTS  %d / %d   -   Unranked" % [done, Meta.PLACEMENT_MATCHES], 14, Color(1.0, 0.82, 0.35)))
+	else:
+		content.add_child(_label("NEXT  %s   (%d / %d MMR)" % [
+			str(progress["next"]),
+			int(progress["mmr_into_tier"]),
+			int(progress["tier_size"]),
+		], 14, Color(0.55, 0.85, 1.0)))
+	var cooldown := Meta.leaver_cooldown_remaining()
+	if cooldown > 0.0:
+		content.add_child(_label("LEAVER COOLDOWN  %d s remaining" % int(ceil(cooldown)), 14, Color(1.0, 0.4, 0.3)))
+	if Meta.is_flagged_smurf():
+		content.add_child(_label("SMURF PROTECTION  accelerated rating gains active", 13, Color(1.0, 0.7, 0.3)))
 	content.add_child(_spacer(8))
-	content.add_child(_body("Matchmaking uses Elo with provisional K-factors for new players, then settles to K=16. Parties are matched on average MMR."))
-	content.add_child(_nav_button("FIND RANKED MATCH", func() -> void: _start_match(3, 2, "Ranked")))
+	content.add_child(_section("MATCHMAKING"))
+	if Matchmaking.in_queue:
+		_queue_status = _label(Matchmaking.status_text(), 15, Color(0.45, 0.9, 1.0))
+		_queue_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		content.add_child(_queue_status)
+		var cancel_btn := _nav_button("CANCEL QUEUE", func() -> void: Matchmaking.cancel())
+		cancel_btn.custom_minimum_size = Vector2(220.0, 42.0)
+		content.add_child(cancel_btn)
+		content.add_child(_body("The search window widens 20 MMR per second. Queue lockouts apply after abandoning a ranked match."))
+	else:
+		var queue_buttons := HBoxContainer.new()
+		queue_buttons.add_theme_constant_override("separation", 12)
+		var ranked_btn := _nav_button("FIND RANKED MATCH", func() -> void: Matchmaking.queue_ranked())
+		ranked_btn.custom_minimum_size = Vector2(260.0, 46.0)
+		queue_buttons.add_child(ranked_btn)
+		var casual_btn := _nav_button("FIND CASUAL MATCH", func() -> void: Matchmaking.queue_casual())
+		casual_btn.custom_minimum_size = Vector2(260.0, 46.0)
+		queue_buttons.add_child(casual_btn)
+		content.add_child(queue_buttons)
+		content.add_child(_string_option("Region", "net/region", ["Auto", "Europe", "North America", "Asia", "South America", "Oceania"], ["auto", "eu", "na", "asia", "sa", "oce"]))
+		content.add_child(_string_option("Party MMR", "net/mmr_rule", ["Average", "Maximum"], ["avg", "max"]))
+		content.add_child(_slider("Max ping (ms)", "net/max_ping", 40.0, 300.0, 10.0))
+		content.add_child(_body("Ranked uses Glicko-2 with 10 placement matches. Casual records stats without changing ranked MMR. Parties queue as one entry using the selected average or max rule."))
 	content.add_child(_section("RANK ICONS"))
-	var tiers := ["Bronze", "Silver", "Gold", "Platinum", "Diamond", "Champion", "Grand Champion"]
-	for t: String in tiers:
+	for i in Meta.RANK_TIERS.size():
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 12)
-		var dot := ColorRect.new()
-		dot.custom_minimum_size = Vector2(16.0, 16.0)
-		dot.color = _tier_color(t)
-		row.add_child(dot)
-		row.add_child(_label(t, 15, _tier_color(t)))
+		var tier_icon := RankIcon.new()
+		tier_icon.setup(i, 3, 40.0)
+		row.add_child(tier_icon)
+		var color := RankIcon.color_for_tier(i)
+		var name_lbl := _label(str(Meta.RANK_TIERS[i]), 15, color)
+		name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(name_lbl)
+		var range_lbl := _label("%d - %d MMR" % [i * Meta.TIER_SIZE, (i + 1) * Meta.TIER_SIZE], 12, Color(0.55, 0.65, 0.8))
+		row.add_child(range_lbl)
 		content.add_child(row)
+
+	# Queue status ticker.
+	if _queue_status != null:
+		_queue_status.text = Matchmaking.status_text()
+
+
+func _on_queue_changed() -> void:
+	if content != null and content.has_meta("ranked"):
+		_show_ranked()
+
+
+func _on_queue_progress(_elapsed: float, _size: int) -> void:
+	if _queue_status != null and is_instance_valid(_queue_status) and Matchmaking.in_queue:
+		_queue_status.text = Matchmaking.status_text()
+
+
+func _on_matchmaking_found(info: Dictionary) -> void:
+	if _match != null:
+		return
+	var rules := MATCH_RULES.duplicate() as MatchRules
+	var teams: Array = info.get("team_mmr", [1000.0, 1000.0])
+	var local_team: int = clampi(int(info.get("local_team", 0)), 0, 1)
+	rules.team_size = clampi(int(info.get("team_size", Settings.get_int("game/team_size"))), 1, 3)
+	rules.ranked = bool(info.get("ranked", false))
+	rules.mode_name = "Ranked" if rules.ranked else "Casual"
+	rules.mode_id = "ranked" if rules.ranked else "casual"
+	rules.team_mmr = float(teams[local_team]) if teams.size() > local_team else float(Meta.profile.get("mmr", 1000.0))
+	rules.opponent_mmr = float(teams[1 - local_team]) if teams.size() > 1 - local_team else 1000.0
+	rules.opponent_rd = 200.0
+	rules.region = str(info.get("region", "auto"))
+	rules.match_id = "%d-%d" % [Time.get_ticks_msec(), randi()]
+	rules.fill_with_bots = true
+	rules.bot_tier = clampi(int(round((rules.opponent_mmr - 700.0) / 500.0)), 0, 3)
+	if NetManager.is_server and not NetManager.is_offline:
+		NetManager.team_size = rules.team_size
+		NetManager.broadcast_match_start(_rules_to_dict(rules))
+	_launch(rules)
 
 
 func _show_private() -> void:
@@ -566,6 +666,12 @@ func _rules_to_dict(rules: MatchRules) -> Dictionary:
 		"free_play": rules.free_play,
 		"unstuck_time": rules.unstuck_time,
 		"arena_theme_index": rules.arena_theme_index,
+		"ranked": rules.ranked,
+		"match_id": rules.match_id,
+		"region": rules.region,
+		"team_mmr": rules.team_mmr,
+		"opponent_mmr": rules.opponent_mmr,
+		"opponent_rd": rules.opponent_rd,
 		"gravity_interval": rules.gravity_interval,
 		"gravity_transition": rules.gravity_transition,
 		"gravity_warning": rules.gravity_warning,
@@ -598,6 +704,12 @@ func _apply_rules_dict(rules: MatchRules, data: Dictionary) -> void:
 	rules.free_play = bool(data.get("free_play", rules.free_play))
 	rules.unstuck_time = float(data.get("unstuck_time", rules.unstuck_time))
 	rules.arena_theme_index = int(data.get("arena_theme_index", rules.arena_theme_index))
+	rules.ranked = bool(data.get("ranked", rules.ranked))
+	rules.match_id = str(data.get("match_id", rules.match_id))
+	rules.region = str(data.get("region", rules.region))
+	rules.team_mmr = float(data.get("team_mmr", rules.team_mmr))
+	rules.opponent_mmr = float(data.get("opponent_mmr", rules.opponent_mmr))
+	rules.opponent_rd = float(data.get("opponent_rd", rules.opponent_rd))
 	rules.gravity_interval = float(data.get("gravity_interval", rules.gravity_interval))
 	rules.gravity_transition = float(data.get("gravity_transition", rules.gravity_transition))
 	rules.gravity_warning = float(data.get("gravity_warning", rules.gravity_warning))
@@ -729,6 +841,32 @@ func _option(text: String, key: String, items: Array) -> Control:
 	)
 	row.add_child(option)
 	return row
+
+
+func _string_option(text: String, key: String, labels: Array, values: Array) -> Control:
+	var row := HBoxContainer.new()
+	var lbl := _label(text, 14, Color(0.78, 0.87, 0.97))
+	lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(lbl)
+	var option := OptionButton.new()
+	option.custom_minimum_size = Vector2(220.0, 36.0)
+	for item: String in labels:
+		option.add_item(item)
+	var current := str(Settings.get_setting(key))
+	var selected: int = values.find(current)
+	option.selected = maxi(selected, 0)
+	option.item_selected.connect(func(index: int) -> void:
+		if not _updating and index >= 0 and index < values.size():
+			Settings.set_setting(key, values[index])
+			if key == "net/region" or key == "net/mmr_rule":
+				_apply_matchmaking_settings()
+	)
+	row.add_child(option)
+	return row
+
+
+func _apply_matchmaking_settings() -> void:
+	Matchmaking.refresh_settings()
 
 
 func _check(text: String, key: String) -> Control:

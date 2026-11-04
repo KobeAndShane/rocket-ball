@@ -76,6 +76,8 @@ func _build_defaults() -> void:
 		"game/mode": "standard",
 		# Network
 		"net/region": "auto",
+		"net/mmr_rule": "avg",
+		"net/max_ping": 120,
 		"net/player_name": "Pilot",
 		"net/test_latency": 0,
 		"net/test_loss": 0.0,

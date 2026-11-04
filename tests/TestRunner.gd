@@ -45,6 +45,12 @@ func _run_all() -> void:
 	await _test_demo_respawn()
 	await _test_bots()
 	await _test_rank_helpers()
+	await _test_glicko2()
+	await _test_ranked_profile()
+	await _test_matchmaker_filters()
+	await _test_matchmaking_population()
+	await _test_matchmaking_service()
+	await _test_matchmaking_menu_launch()
 	await _test_car_settles_on_floor()
 	await _test_snapshot_codec()
 	await _test_input_redundancy()
@@ -492,6 +498,221 @@ func _test_rank_helpers() -> void:
 	_check(Meta.xp_for_level(3) > Meta.xp_for_level(2), "XP curve grows")
 	_check(Meta.cosmetic("body_stock").size() > 0, "catalog lookup works")
 	_check(Meta.cosmetic("does_not_exist").is_empty(), "unknown cosmetic is empty")
+	await _cleanup()
+
+
+# --- 11 matchmaking / ranking ------------------------------------------------
+
+func _test_glicko2() -> void:
+	_begin("Glicko-2")
+	var winner := Glicko2.new(1000.0, 350.0, 0.06)
+	var start_rd: float = winner.rd
+	winner.update(1000.0, 200.0, 1.0)
+	_check(winner.rating > 1000.0, "win raises rating", "rating=%.1f" % winner.rating)
+	_check(winner.rd < start_rd, "RD shrinks after a result", "rd=%.1f" % winner.rd)
+	var loser := Glicko2.new(1000.0, 120.0, 0.06)
+	var before_loss: float = loser.rating
+	loser.update(1000.0, 120.0, 0.0)
+	_check(loser.rating < before_loss, "loss lowers rating", "rating=%.1f" % loser.rating)
+	var roundtrip := Glicko2.from_dict(loser.to_dict())
+	_check(_near(roundtrip.rating, loser.rating) and _near(roundtrip.rd, loser.rd), "rating serialises")
+	var upset := Glicko2.new(800.0, 200.0, 0.06)
+	var favourite := Glicko2.new(1400.0, 100.0, 0.06)
+	var upset_gain: float = float(upset.update(1400.0, 100.0, 1.0)["delta"])
+	var expected_gain: float = float(Glicko2.new(1000.0, 200.0, 0.06).update(1000.0, 100.0, 1.0)["delta"])
+	_check(upset_gain > expected_gain, "upsets move ratings more", "%.1f vs %.1f" % [upset_gain, expected_gain])
+	_check(favourite.rd >= Glicko2.MIN_RD, "RD never drops below the floor")
+	await _cleanup()
+
+
+func _test_ranked_profile() -> void:
+	_begin("Ranked profile, placements, seasons and leavers")
+	var original: Dictionary = Meta.profile.duplicate(true)
+	Meta.profile["mmr"] = 1000.0
+	Meta.profile["peak_mmr"] = 1000.0
+	Meta.profile["rd"] = 350.0
+	Meta.profile["volatility"] = 0.06
+	Meta.profile["placement_matches"] = 0
+	Meta.profile["ranked_matches"] = 0
+	Meta.profile["ranked_wins"] = 0
+	Meta.profile["smurf_risk"] = 0.0
+	Meta.profile["season"] = 1
+	Meta.profile["season_started"] = Time.get_unix_time_from_system()
+	Meta.profile["season_matches"] = 0
+	Meta.profile["season_wins"] = 0
+	Meta.profile["season_peak_mmr"] = 1000.0
+	Meta.profile["season_history"] = []
+	Meta.profile["abandon_count"] = 0
+	Meta.profile["leaver_cooldown_until"] = 0.0
+	_check(Meta.rank_name() == "Unranked", "new accounts are unranked")
+	var first := Meta.apply_rated_result(true, 1000.0, 200.0, 4.0)
+	_check(float(first["mmr"]) > 1000.0, "placement win raises MMR")
+	_check(float(first["rd"]) < 350.0, "placement win tightens RD")
+	_check(int(Meta.profile["placement_matches"]) == 1, "placement counter increments")
+	_check(float(Meta.profile["smurf_risk"]) > 0.0, "large-margin wins raise smurf risk")
+	for i in 9:
+		Meta.apply_rated_result(true, 1000.0, 200.0, 2.0)
+	_check(int(Meta.profile["placement_matches"]) == Meta.PLACEMENT_MATCHES, "10 placements complete")
+	_check(Meta.rank_name() != "Unranked", "placement completion shows rank", Meta.rank_name())
+	_check(Meta.is_flagged_smurf(), "repeated high-margin wins flag smurf risk")
+	Meta.profile["smurf_risk"] = 1.0
+	_check(_near(Meta.smurf_multiplier(), 1.5, 0.001), "smurf multiplier caps at 1.5", "%.2f" % Meta.smurf_multiplier())
+	var old_mmr: float = float(Meta.profile["mmr"])
+	var old_season: int = int(Meta.profile["season"])
+	var reset := Meta.start_new_season(Time.get_unix_time_from_system())
+	_check(int(Meta.profile["season"]) == old_season + 1, "season increments")
+	_check(_near(float(Meta.profile["mmr"]), 1000.0 + (old_mmr - 1000.0) * 0.5, 0.01), "soft reset halves distance from 1000", "mmr=%.1f" % float(Meta.profile["mmr"]))
+	_check(int(Meta.profile["placement_matches"]) == 0, "new season requires placements again")
+	_check(int(reset["season"]) == old_season + 1, "reset result reports the new season")
+	_check((Meta.profile["season_history"] as Array).size() == 1, "season archive is stored")
+	_check(Meta.rank_name() == "Unranked", "soft reset is provisional")
+	var now: float = 200000.0
+	var cooldown: float = Meta.register_abandon(now)
+	_check(_near(cooldown, 300.0), "first abandon is a 5 minute cooldown")
+	_check(not Meta.can_queue(now + 1.0), "queue is locked during cooldown")
+	_check(Meta.can_queue(now + cooldown + 1.0), "queue unlocks after cooldown")
+	var second: float = Meta.register_abandon(now + cooldown + 2.0)
+	_check(_near(second, 900.0), "second abandon escalates to 15 minutes")
+	_check(not Meta.check_season_rollover(now), "season does not roll before expiry")
+	_check(Meta.check_season_rollover(Meta.season_ends_at() + 1.0), "expired season rolls over automatically")
+	Meta.profile = original
+	Meta.save_profile()
+	await _cleanup()
+
+
+func _test_matchmaker_filters() -> void:
+	_begin("Matchmaker filters and party MMR")
+	var matcher := Matchmaker.new()
+	var average: float = matcher.effective_mmr({"party_size": 2, "party_mmrs": [1000.0, 1400.0]}, "avg")
+	var maximum: float = matcher.effective_mmr({"party_size": 2, "party_mmrs": [1000.0, 1400.0]}, "max")
+	_check(_near(average, 1200.0), "party average rule", "%.1f" % average)
+	_check(_near(maximum, 1400.0), "party max rule", "%.1f" % maximum)
+	var early: float = matcher.search_window({"joined": 0.0}, 2.0, "ranked")
+	var later: float = matcher.search_window({"joined": 0.0}, 20.0, "ranked")
+	_check(later > early, "search window expands with wait time")
+	var ping_matcher := Matchmaker.new()
+	ping_matcher.enqueue({"mmr": 1000.0, "region": "eu", "ping": 30, "joined": 0.0})
+	ping_matcher.enqueue({"mmr": 1000.0, "region": "eu", "ping": 220, "joined": 0.0})
+	var blocked := ping_matcher.tick(2.0, 1, "eu", 120, "avg", "ranked")
+	_check(blocked.is_empty(), "high-ping players are filtered out")
+	_check(ping_matcher.size() == 2, "filtered players stay queued")
+	var region_matcher := Matchmaker.new()
+	region_matcher.enqueue({"mmr": 1000.0, "region": "eu", "ping": 20, "joined": 0.0})
+	region_matcher.enqueue({"mmr": 1000.0, "region": "na", "ping": 20, "joined": 0.0})
+	_check(region_matcher.tick(2.0, 1, "eu", 120, "avg", "ranked").is_empty(), "region filter rejects cross-region pairs")
+	var fair := Matchmaker.new()
+	for i in 6:
+		fair.enqueue({"mmr": 1000.0 + i * 5.0, "region": "eu", "ping": 25, "joined": 0.0})
+	var matches := fair.tick(4.0, 3, "eu", 120, "avg", "ranked")
+	_check(matches.size() == 1, "six players form one 3v3")
+	if not matches.is_empty():
+		_check(float(matches[0]["spread"]) <= 30.0, "balanced team MMR", "spread=%.1f" % float(matches[0]["spread"]))
+	_check(fair.size() == 0, "matched players leave the queue")
+	await _cleanup()
+
+
+func _test_matchmaking_population() -> void:
+	_begin("1000-player matchmaking simulation")
+	var started: int = Time.get_ticks_msec()
+	var report: Dictionary = Matchmaker.simulate_population(1000, 3, 30.0, 0.5, 7)
+	var elapsed_ms: int = Time.get_ticks_msec() - started
+	var formed: int = int(report["formed"])
+	_check(formed >= 150, "1000 players produce at least 150 matches", "formed=%d" % formed)
+	_check(float(report["max_wait"]) <= 30.0, "matches form within the 30 s target", "max_wait=%.1f" % float(report["max_wait"]))
+	_check(float(report["avg_spread"]) <= 250.0, "team MMR spread stays balanced", "avg_spread=%.1f" % float(report["avg_spread"]))
+	_check(elapsed_ms < 5000, "simulation completes in under 5 seconds", "%d ms" % elapsed_ms)
+	# Matches must fill six seats and never reuse a queue entry. Parties are one
+	# entry with multiple seats, so seat count comes from the match size field.
+	var seen: Dictionary = {}
+	var valid: bool = true
+	for info: Dictionary in report["matches"]:
+		if int(info["size"]) != 6:
+			valid = false
+		for id: Variant in info["players"]:
+			if seen.has(int(id)):
+				valid = false
+			seen[int(id)] = true
+	_check(valid, "every match fills six disjoint seats")
+	_check(int(report["unmatched"]) <= 40, "queue drains almost completely", "unmatched=%d" % int(report["unmatched"]))
+	await _cleanup()
+
+
+func _test_matchmaking_service() -> void:
+	_begin("Matchmaking service")
+	var original: Dictionary = Meta.profile.duplicate(true)
+	Meta.profile["mmr"] = 1000.0
+	Meta.profile["rd"] = 200.0
+	Meta.profile["placement_matches"] = Meta.PLACEMENT_MATCHES
+	Meta.profile["leaver_cooldown_until"] = 0.0
+	Settings.set_setting("game/team_size", 3, false)
+	Settings.set_setting("net/region", "auto", false)
+	Settings.set_setting("net/mmr_rule", "avg", false)
+	var captured: Array[Dictionary] = []
+	var on_found := func(info: Dictionary) -> void: captured.append(info)
+	Matchmaking.match_found.connect(on_found)
+	_check(Matchmaking.queue("ranked"), "ranked queue starts")
+	_check(Matchmaking.in_queue, "service reports queued")
+	_check(Matchmaking.queue_size() >= 6, "synthetic population fills the queue", "size=%d" % Matchmaking.queue_size())
+	_check(not Matchmaking.queue("casual"), "cannot queue twice")
+	for i in 8:
+		if Matchmaking.in_queue:
+			Matchmaking.elapsed += 1.0
+			Matchmaking.tick_now()
+	_check(captured.size() == 1, "service emits one match", "count=%d" % captured.size())
+	if not captured.is_empty():
+		var info: Dictionary = captured[0]
+		_check(bool(info.get("ranked", false)), "match carries ranked flag")
+		_check(int(info.get("team_size", 0)) == 3, "match carries team size")
+		_check(int(info.get("size", 0)) == 6, "match fills six seats")
+		_check((info.get("team_mmr", []) as Array).size() == 2, "match reports both team MMRs")
+		_check(int(info.get("local_team", -1)) >= 0, "match resolves the local team")
+	captured.clear()
+	_check(Matchmaking.queue("casual"), "casual queue starts")
+	for i in 8:
+		if Matchmaking.in_queue:
+			Matchmaking.elapsed += 1.0
+			Matchmaking.tick_now()
+	_check(captured.size() == 1, "casual service emits one match")
+	if not captured.is_empty():
+		_check(not bool(captured[0].get("ranked", true)), "casual match is unrated")
+	_check(Matchmaking.queue("ranked"), "queue can be restarted")
+	Matchmaking.cancel(true)
+	_check(not Matchmaking.in_queue, "cancel clears the queue")
+	_check(Matchmaking.queue_size() == 0, "cancel empties the matcher")
+	Matchmaking.match_found.disconnect(on_found)
+	Meta.profile = original
+	Meta.save_profile()
+	await _cleanup()
+
+
+func _test_matchmaking_menu_launch() -> void:
+	_begin("Matchmaking menu integration")
+	var original: Dictionary = Meta.profile.duplicate(true)
+	Meta.profile["mmr"] = 1100.0
+	Meta.profile["rd"] = 180.0
+	Meta.profile["placement_matches"] = Meta.PLACEMENT_MATCHES
+	Meta.profile["leaver_cooldown_until"] = 0.0
+	var menu := _track(load("res://ui/Main.tscn").instantiate()) as Control
+	add_child(menu)
+	await get_tree().process_frame
+	var started: bool = Matchmaking.queue("ranked")
+	_check(started, "menu can start a ranked queue")
+	for i in 8:
+		if Matchmaking.in_queue:
+			Matchmaking.elapsed += 1.0
+			Matchmaking.tick_now()
+	await get_tree().process_frame
+	var controller: MatchController = menu.get("_match") as MatchController
+	_check(controller != null, "queue result launches the match scene")
+	if controller != null:
+		_check(controller.rules.ranked, "launched rules are ranked")
+		_check(controller.rules.team_size == 3, "launched rules keep 3v3")
+		_check(controller.rules.opponent_mmr > 0.0, "launched rules carry opponent MMR")
+		_check(controller.rules.match_id != "", "launched match has an id")
+		_check(not menu.visible, "menu hides when the match starts")
+	Matchmaking.cancel(true)
+	Meta.profile = original
+	Meta.save_profile()
 	await _cleanup()
 
 
