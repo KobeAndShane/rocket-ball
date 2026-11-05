@@ -48,7 +48,7 @@ func _process(delta: float) -> void:
 	car_fwd -= _smooth_up * car_fwd.dot(_smooth_up)
 	if car_fwd.length_squared() < 0.01:
 		car_fwd = _smooth_up.cross(Vector3.RIGHT)
-	car_fwd.normalize()
+	car_fwd = car_fwd.normalized()
 
 	var look_behind: bool = Input.is_action_pressed("look_behind")
 	var backwards: float = -1.0 if look_behind else 1.0

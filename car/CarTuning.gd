@@ -33,16 +33,18 @@ extends Resource
 @export var coyote_time: float = 0.1
 
 @export_group("Air")
-@export var jump_impulse: float = 8.0
-@export var double_jump_impulse: float = 7.5
+@export var jump_impulse: float = 11.0
+@export var double_jump_impulse: float = 9.5
 @export var double_jump_window: float = 1.5
 @export var dodge_impulse: float = 15.0
 @export var dodge_up_bias: float = 2.5
 @export var dodge_duration: float = 0.45
-@export var air_pitch_torque: float = 1.6
-@export var air_yaw_torque: float = 1.3
-@export var air_roll_torque: float = 1.4
-@export var air_damping: float = 0.6
+## Max air rotation rates in rad/s (names kept for saved .tres compatibility).
+@export var air_pitch_torque: float = 5.0
+@export var air_yaw_torque: float = 4.5
+@export var air_roll_torque: float = 5.5
+## How quickly air rotation reaches the target rate (1/s). Higher = snappier.
+@export var air_damping: float = 10.0
 
 @export_group("Boost")
 @export var boost_accel: float = 30.0

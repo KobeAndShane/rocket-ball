@@ -79,18 +79,22 @@ func _process_hits(body_state: PhysicsDirectBodyState3D) -> void:
 		if float(_hit_cooldowns.get(id, 0.0)) > 0.0:
 			continue
 
-		var contact_normal: Vector3 = body_state.get_contact_local_normal(i).normalized()
+		var offset: Vector3 = body_state.get_contact_local_position(i) - body_state.transform.origin
+		if offset.length_squared() < 0.0001:
+			continue
+		# Push from the contact point through the ball's centre.
+		var push_dir: Vector3 = -offset.normalized()
 		var car_velocity: Vector3 = body_state.get_contact_collider_velocity_at_position(i)
 		var relative: Vector3 = car_velocity - body_state.linear_velocity
-		# Normal points out of the ball; closing speed is along -normal.
-		var closing: float = relative.dot(-contact_normal)
+		var closing: float = relative.dot(push_dir)
 		if closing < 1.0:
 			continue
 
+		# `power` is a velocity change; scale by mass to turn it into an impulse.
 		var power: float = minf(closing * tuning.hit_transfer, tuning.max_hit_impulse)
-		var impulse: Vector3 = (-contact_normal) * power
+		var impulse: Vector3 = push_dir * power
 		impulse += GravityManager.up * power * tuning.pop_bias
-		var offset: Vector3 = body_state.get_contact_local_position(i) - body_state.transform.origin
+		impulse *= mass
 		body_state.apply_impulse(impulse, offset)
 		body_state.apply_torque_impulse(
 			offset.cross(impulse) * tuning.spin_transfer
