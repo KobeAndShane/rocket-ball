@@ -34,6 +34,7 @@ var _jumps_used: int = 0
 var _air_time: float = 0.0
 var _coyote: float = 0.0
 var _dodge_timer: float = 0.0
+var _dodge_dir: Vector3 = Vector3.ZERO
 var _jump_queued: bool = false
 var _space_state: PhysicsDirectSpaceState3D
 var _events_connected: bool = false
@@ -273,20 +274,34 @@ func _apply_ground_forces(body_state: PhysicsDirectBodyState3D, delta: float) ->
 	)
 
 
-func _apply_air_forces(body_state: PhysicsDirectBodyState3D, _delta: float) -> void:
-	var pitch_axis: Vector3 = body_state.transform.basis.x.normalized()
-	var roll_axis: Vector3 = -body_state.transform.basis.z.normalized()
-	var yaw_axis: Vector3 = GravityManager.up
+func _apply_air_forces(body_state: PhysicsDirectBodyState3D, delta: float) -> void:
+	# Let a dodge's momentum play out without air control fighting it.
+	if state == State.DODGING:
+		return
+	var basis: Basis = body_state.transform.basis.orthonormalized()
+	var pitch_axis: Vector3 = basis.x    # +rotation = nose up
+	var yaw_axis: Vector3 = -basis.y     # +rotation = nose right
+	var roll_axis: Vector3 = -basis.z    # +rotation = roll right
 
-	var pitch_input: float = in_pitch
-	if in_throttle > 0.1:
-		pitch_input += in_throttle
-	if in_brake > 0.1:
-		pitch_input -= in_brake
-	body_state.apply_torque(pitch_axis * pitch_input * tuning.air_pitch_torque * mass)
-	body_state.apply_torque(yaw_axis * in_steer * tuning.air_yaw_torque * mass)
-	body_state.apply_torque(roll_axis * in_roll * tuning.air_roll_torque * mass)
-	body_state.apply_torque(-body_state.angular_velocity * tuning.air_damping * mass)
+	# W / throttle pitches the nose down in the air, S / brake pitches it up.
+	var pitch_input: float = clampf(in_pitch - in_throttle + in_brake, -1.0, 1.0)
+	# Holding air roll turns steering into roll instead of yaw.
+	var yaw_input: float = in_steer
+	var roll_input: float = 0.0
+	if in_roll > 0.5:
+		roll_input = in_steer
+		yaw_input = 0.0
+
+	# Drive angular velocity toward a target rate: snappy response, and the
+	# car stops rotating when the stick is released.
+	var target_av: Vector3 = (
+		pitch_axis * pitch_input * tuning.air_pitch_torque
+		+ yaw_axis * yaw_input * tuning.air_yaw_torque
+		+ roll_axis * roll_input * tuning.air_roll_torque
+	)
+	body_state.angular_velocity = body_state.angular_velocity.lerp(
+		target_av, 1.0 - exp(-tuning.air_damping * delta)
+	)
 
 
 func _apply_boost(body_state: PhysicsDirectBodyState3D, _up_dir: Vector3) -> void:
@@ -367,6 +382,7 @@ func reset_to_transform(xform: Transform3D) -> void:
 	_air_time = 0.0
 	_coyote = 0.0
 	_dodge_timer = 0.0
+	_dodge_dir = Vector3.ZERO
 	_jump_queued = false
 	_set_state(State.AIRBORNE)
 
@@ -380,5 +396,5 @@ func set_controls_enabled(value: bool) -> void:
 func _project_to_plane(vec: Vector3, n: Vector3) -> Vector3:
 	var out := vec - n * vec.dot(n)
 	if out.length_squared() > 0.0001:
-		out.normalize()
+		out = out.normalized()
 	return out

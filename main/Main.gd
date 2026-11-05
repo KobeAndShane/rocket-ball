@@ -14,7 +14,7 @@ var ball: Ball
 var car: Car
 var chase_camera: ChaseCamera
 var hud: HUD
-var match: MatchController
+var match_controller: MatchController
 
 
 func _ready() -> void:
@@ -49,8 +49,9 @@ func _ready() -> void:
 	add_child(hud)
 	hud.bind(car, ball)
 
-	match = MatchController.new()
-	match.name = "MatchController"
-	add_child(match)
-	match.setup(arena, ball, [car], rules)
-	match.start_match()
+	match_controller = MatchController.new()
+	match_controller.name = "MatchController"
+	add_child(match_controller)
+	var cars: Array[Car] = [car]
+	match_controller.setup(arena, ball, cars, rules)
+	match_controller.start_match()

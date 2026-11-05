@@ -32,7 +32,11 @@ func _build_shell() -> void:
 	body.collision_mask = 0
 	var collider := CollisionShape3D.new()
 	collider.name = "ArenaCollider"
-	collider.shape = mesh.create_trimesh_shape()
+	var shape := mesh.create_trimesh_shape()
+	# The shell is a single thin surface; colliding with both sides stops fast
+	# cars or the ball from tunnelling through it.
+	shape.backface_collision = true
+	collider.shape = shape
 	body.add_child(collider)
 	add_child(body)
 
@@ -220,9 +224,11 @@ func _corner_dir(sx: int, sy: int, sz: int, u: float, v: float) -> Vector3:
 func _add_quad(
 	st: SurfaceTool, positions: Array[Vector3], normals: Array[Vector3]
 ) -> void:
+	# Godot treats clockwise triangles as front faces, so the winding must be
+	# clockwise when viewed from the side the normal points to (inside the arena).
 	var cross: Vector3 = (positions[1] - positions[0]).cross(positions[3] - positions[0])
 	var avg_normal: Vector3 = (normals[0] + normals[1] + normals[2] + normals[3]).normalized()
-	if cross.dot(avg_normal) < 0.0:
+	if cross.dot(avg_normal) > 0.0:
 		var p_tmp: Vector3 = positions[1]
 		positions[1] = positions[3]
 		positions[3] = p_tmp
@@ -250,7 +256,7 @@ static func transform_from_up_forward(pos: Vector3, up: Vector3, forward: Vector
 	var fwd: Vector3 = forward - up_n * forward.dot(up_n)
 	if fwd.length_squared() < 0.0001:
 		fwd = Vector3.FORWARD
-	fwd.normalize()
+	fwd = fwd.normalized()
 	var z_axis: Vector3 = -fwd
 	var x_axis: Vector3 = up_n.cross(z_axis).normalized()
 	return Transform3D(Basis(x_axis, up_n, z_axis), pos)
@@ -272,11 +278,12 @@ static func pad_layout(half: Vector3, r: float) -> Array[Dictionary]:
 		var v_axis: Vector3 = Vector3.UP if vertical else Vector3.BACK
 		var surface_point: Vector3 = -n * extent_n + n * 0.35
 
-		var large_uv: Array[Vector2] = (
-			[Vector2(0.0, 0.0)]
-			if vertical
-			else [Vector2(-0.5, 0.0), Vector2(0.5, 0.0)]
-		)
+		var large_uv: Array[Vector2] = []
+		if vertical:
+			large_uv.append(Vector2(0.0, 0.0))
+		else:
+			large_uv.append(Vector2(-0.5, 0.0))
+			large_uv.append(Vector2(0.5, 0.0))
 		for uv: Vector2 in large_uv:
 			result.append({
 				"position": surface_point + u_axis * uv.x * e_u + v_axis * uv.y * e_v,
@@ -284,7 +291,8 @@ static func pad_layout(half: Vector3, r: float) -> Array[Dictionary]:
 				"large": true,
 			})
 
-		var small_uv: Array[Vector2] = [
+		var small_uv: Array[Vector2] = []
+		small_uv.assign([
 			Vector2(-0.55, 0.0),
 			Vector2(0.55, 0.0),
 			Vector2(-0.25, 0.55),
@@ -292,7 +300,7 @@ static func pad_layout(half: Vector3, r: float) -> Array[Dictionary]:
 			Vector2(-0.25, -0.55),
 			Vector2(0.25, -0.55),
 			Vector2(0.0, 0.28),
-		]
+		])
 		for uv: Vector2 in small_uv:
 			result.append({
 				"position": surface_point + u_axis * uv.x * e_u + v_axis * uv.y * e_v,
