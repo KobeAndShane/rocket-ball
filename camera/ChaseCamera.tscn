@@ -1,10 +1,6 @@
 [gd_scene load_steps=2 format=3]
 
-[ext_resource type="Script" path="res://camera/ChaseCamera.gd" id="1_camera"]
+[ext_resource type="Script" path="res://camera/ChaseCamera.gd" id="1_cam"]
 
 [node name="ChaseCamera" type="Camera3D"]
-current = true
-fov = 100.0
-near = 0.08
-far = 420.0
-script = ExtResource("1_camera")
+script = ExtResource("1_cam")

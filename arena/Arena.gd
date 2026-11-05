@@ -1,572 +1,302 @@
-class_name Arena
 extends Node3D
-## Procedurally built rounded arena. Every face is drivable, goals sit on the
-## Z axis so gravity never turns a goal into floor or ceiling.
+class_name Arena
+## Procedural rounded-box arena (Task 03). Every inner edge and corner is
+## filleted so cars can drive the entire surface. Goals sit on the +-X faces;
+## gravity rotates around X, so goals are never floor or ceiling.
 
-const HALF_EXTENTS := Vector3(30.0, 15.0, 40.0)
-const FILLET_RADIUS := 1.3
-const WALL_THICKNESS := 1.0
-const GOAL_WIDTH := 12.0
-const GOAL_HEIGHT := 8.0
-const GOAL_DEPTH := 6.0
-const SPAWN_HEIGHT := 0.92
+@export var half_extents: Vector3 = Vector3(30.0, 18.0, 22.0)
+@export var fillet_radius: float = 4.0
+@export var goal_width: float = 10.0
+@export var goal_height: float = 6.0
 
-const GOAL_SCENE := preload("res://arena/Goal.tscn")
-const PAD_SCENE := preload("res://arena/BoostPad.tscn")
-
-@export var theme: ArenaTheme
-@export var rules: MatchRules
-@export var build_environment: bool = true
-@export var build_pads: bool = true
-
-var goals: Array[Goal] = []
-var pads: Array[BoostPad] = []
-var spawn_markers: Array[Transform3D] = []
-
-var _geometry: StaticBody3D
-var _pad_root: Node3D
-var _floor_mat: StandardMaterial3D
-var _wall_mat: StandardMaterial3D
-var _trim_mat: StandardMaterial3D
-var _pad_layout: Array[Dictionary] = []
-var _pad_multimeshes: Dictionary = {}
-var _pad_materials: Dictionary = {}
-var _pad_indices: Dictionary = {}
-var _pad_transforms: Dictionary = {}
-var _pad_hidden: Dictionary = {}
-var _pad_pulse: float = 0.0
+const AXES: Array[Vector3] = [Vector3.RIGHT, Vector3.UP, Vector3.BACK]
 
 
 func _ready() -> void:
-	if theme == null:
-		theme = load("res://arena/ArenaTheme.tres") as ArenaTheme
-	if rules == null:
-		rules = load("res://match/MatchRules.tres") as MatchRules
-	_build_materials()
-	_build_geometry()
+	_build_shell()
 	_build_goals()
-	if build_pads:
-		_build_pads()
-	_build_spawn_markers()
-	if build_environment:
-		_build_environment()
+	_build_pads()
+	_build_environment()
 
 
-func configure(new_rules: MatchRules, new_theme: ArenaTheme = null) -> void:
-	rules = new_rules
-	if new_theme != null:
-		theme = new_theme
+func _build_shell() -> void:
+	var mesh := generate_shell_mesh(half_extents, fillet_radius)
+	var mesh_instance := MeshInstance3D.new()
+	mesh_instance.name = "ArenaMesh"
+	mesh_instance.mesh = mesh
+	add_child(mesh_instance)
 
-
-## Swap the visual theme at kickoff without rebuilding collision.
-func apply_theme(new_theme: ArenaTheme) -> void:
-	if new_theme == null:
-		return
-	theme = new_theme
-	if _floor_mat == null:
-		return
-	_floor_mat.albedo_color = theme.floor_color
-	_floor_mat.emission = theme.trim_color * 0.035
-	_wall_mat.albedo_color = theme.wall_color
-	_trim_mat.albedo_color = theme.trim_color
-	_trim_mat.emission = theme.trim_color
-	for node: Node in get_children():
-		if node is WorldEnvironment:
-			var env := (node as WorldEnvironment).environment
-			if env != null and env.sky != null and env.sky.sky_material is ProceduralSkyMaterial:
-				var sky_mat := env.sky.sky_material as ProceduralSkyMaterial
-				sky_mat.sky_top_color = theme.sky_top
-				sky_mat.sky_horizon_color = theme.sky_bottom
-				sky_mat.ground_bottom_color = theme.sky_top
-				sky_mat.ground_horizon_color = theme.sky_bottom
-			if env != null:
-				env.ambient_light_color = theme.ambient_color
-				env.ambient_light_energy = theme.ambient_energy
-				env.fog_light_color = theme.sky_bottom
-				env.fog_enabled = theme.fog_enabled
-				env.fog_density = theme.fog_density
-		elif node is DirectionalLight3D:
-			(node as DirectionalLight3D).light_energy = theme.sun_energy
-		elif node is OmniLight3D:
-			var light := node as OmniLight3D
-			light.light_color = theme.accent_color if light.name.begins_with("Accent") else theme.trim_color
-	for goal: Goal in goals:
-		if goal != null:
-			goal.apply_theme(theme)
-
-
-func theme_names() -> Array[String]:
-	return ["Neon Grid", "Cryo Ice", "Solar Lava"]
-
-
-func _build_materials() -> void:
-	_floor_mat = StandardMaterial3D.new()
-	_floor_mat.albedo_color = theme.floor_color
-	_floor_mat.metallic = 0.25
-	_floor_mat.roughness = 0.55
-	_floor_mat.emission_enabled = true
-	_floor_mat.emission = theme.trim_color * 0.035
-	_wall_mat = StandardMaterial3D.new()
-	_wall_mat.albedo_color = theme.wall_color
-	_wall_mat.metallic = 0.35
-	_wall_mat.roughness = 0.42
-	_trim_mat = StandardMaterial3D.new()
-	_trim_mat.albedo_color = theme.trim_color
-	_trim_mat.emission_enabled = true
-	_trim_mat.emission = theme.trim_color
-	_trim_mat.emission_energy_multiplier = 2.6
-	_trim_mat.metallic = 0.7
-	_trim_mat.roughness = 0.2
-
-
-func _build_geometry() -> void:
-	_geometry = StaticBody3D.new()
-	_geometry.name = "Geometry"
-	_geometry.collision_layer = 1
-	_geometry.collision_mask = 0
-	add_child(_geometry)
-	var h := HALF_EXTENTS
-	var t := WALL_THICKNESS
-	# Floor and ceiling.
-	_add_box(Vector3(0.0, -(h.y + t * 0.5), 0.0), Vector3(h.x * 2.0, t, h.z * 2.0), _floor_mat)
-	_add_box(Vector3(0.0, h.y + t * 0.5, 0.0), Vector3(h.x * 2.0, t, h.z * 2.0), _wall_mat)
-	# Long side walls.
-	_add_box(Vector3(-(h.x + t * 0.5), 0.0, 0.0), Vector3(t, h.y * 2.0, h.z * 2.0), _wall_mat)
-	_add_box(Vector3(h.x + t * 0.5, 0.0, 0.0), Vector3(t, h.y * 2.0, h.z * 2.0), _wall_mat)
-	# Goal end walls with an opening.
-	for s: float in [-1.0, 1.0]:
-		_add_end_wall(s)
-		_add_goal_recess(s)
-	# 12 filleted edges.
-	var r := FILLET_RADIUS
-	for sy: float in [-1.0, 1.0]:
-		for sx: float in [-1.0, 1.0]:
-			_add_cylinder(Vector3(sx * (h.x - r), sy * (h.y - r), 0.0), r, h.z * 2.0, 2, _wall_mat)
-	for sy: float in [-1.0, 1.0]:
-		for sz: float in [-1.0, 1.0]:
-			_add_cylinder(Vector3(0.0, sy * (h.y - r), sz * (h.z - r)), r, h.x * 2.0, 0, _wall_mat)
-	for sx: float in [-1.0, 1.0]:
-		for sz: float in [-1.0, 1.0]:
-			_add_cylinder(Vector3(sx * (h.x - r), 0.0, sz * (h.z - r)), r, h.y * 2.0, 1, _wall_mat)
-	# 8 rounded corners.
-	for sx: float in [-1.0, 1.0]:
-		for sy: float in [-1.0, 1.0]:
-			for sz: float in [-1.0, 1.0]:
-				_add_sphere(Vector3(sx * (h.x - r), sy * (h.y - r), sz * (h.z - r)), r, _wall_mat)
-	_add_trim_bands()
-
-
-func _add_end_wall(s: float) -> void:
-	var h := HALF_EXTENTS
-	var t := WALL_THICKNESS
-	var gw := GOAL_WIDTH
-	var gh := GOAL_HEIGHT
-	var z := s * (h.z + t * 0.5)
-	var side_width: float = h.x - gw * 0.5
-	var side_center: float = gw * 0.5 + side_width * 0.5
-	_add_box(Vector3(-side_center, 0.0, z), Vector3(side_width, h.y * 2.0, t), _wall_mat)
-	_add_box(Vector3(side_center, 0.0, z), Vector3(side_width, h.y * 2.0, t), _wall_mat)
-	var above_height: float = h.y - gh * 0.5
-	var above_center: float = gh * 0.5 + above_height * 0.5
-	_add_box(Vector3(0.0, above_center, z), Vector3(gw, above_height, t), _wall_mat)
-	_add_box(Vector3(0.0, -above_center, z), Vector3(gw, above_height, t), _wall_mat)
-
-
-func _add_goal_recess(s: float) -> void:
-	var gw := GOAL_WIDTH
-	var gh := GOAL_HEIGHT
-	var gd := GOAL_DEPTH
-	var hz := HALF_EXTENTS.z
-	var mid_z: float = s * (hz + gd * 0.5)
-	# Back wall.
-	_add_box(Vector3(0.0, 0.0, s * (hz + gd + 0.25)), Vector3(gw, gh, 0.5), _wall_mat)
-	# Sides.
-	_add_box(Vector3(-(gw * 0.5 + 0.25), 0.0, mid_z), Vector3(0.5, gh, gd), _wall_mat)
-	_add_box(Vector3(gw * 0.5 + 0.25, 0.0, mid_z), Vector3(0.5, gh, gd), _wall_mat)
-	# Top and bottom.
-	_add_box(Vector3(0.0, gh * 0.5 + 0.25, mid_z), Vector3(gw, 0.5, gd), _wall_mat)
-	_add_box(Vector3(0.0, -(gh * 0.5 + 0.25), mid_z), Vector3(gw, 0.5, gd), _wall_mat)
-
-
-func _add_trim_bands() -> void:
-	var h := HALF_EXTENTS
-	var inset: float = 0.04
-	var band := 0.16
-	for s: float in [-1.0, 1.0]:
-		# Glowing lines where the four long fillets meet the flat faces.
-		_add_visual_box(Vector3(0.0, s * (h.y - FILLET_RADIUS), s * 0.0), Vector3(h.x * 2.0, band, band), _trim_mat)
-	# Goal line bands.
-	for s: float in [-1.0, 1.0]:
-		_add_visual_box(Vector3(0.0, -h.y + inset + 0.09, s * (h.z - inset)), Vector3(GOAL_WIDTH + 1.0, 0.05, 0.18), _trim_mat)
-	# Four long emissive accent rails make the arena orientation readable from
-	# every gravity phase without relying on a single floor.
-	for sx: float in [-1.0, 1.0]:
-		for sy: float in [-1.0, 1.0]:
-			_add_visual_box(
-				Vector3(sx * (h.x - inset - 0.10), sy * (h.y - inset - 0.10), 0.0),
-				Vector3(0.10, 0.10, h.z * 2.0 - 0.8),
-				_trim_mat
-			)
-
-
-func _add_box(center: Vector3, size: Vector3, mat: Material) -> void:
-	var mi := MeshInstance3D.new()
-	var bm := BoxMesh.new()
-	bm.size = size
-	mi.mesh = bm
-	mi.material_override = mat
-	mi.position = center
-	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-	add_child(mi)
-	var cs := CollisionShape3D.new()
-	var shape := BoxShape3D.new()
-	shape.size = size
-	cs.shape = shape
-	cs.position = center
-	_geometry.add_child(cs)
-
-
-func _add_visual_box(center: Vector3, size: Vector3, mat: Material) -> void:
-	var mi := MeshInstance3D.new()
-	var bm := BoxMesh.new()
-	bm.size = size
-	mi.mesh = bm
-	mi.material_override = mat
-	mi.position = center
-	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	add_child(mi)
-
-
-func _add_cylinder(center: Vector3, radius: float, length: float, axis: int, mat: Material) -> void:
-	var mi := MeshInstance3D.new()
-	var cm := CylinderMesh.new()
-	cm.top_radius = radius
-	cm.bottom_radius = radius
-	cm.height = length
-	cm.radial_segments = 28
-	cm.rings = 1
-	mi.mesh = cm
-	mi.material_override = mat
-	mi.position = center
-	var rot := Vector3.ZERO
-	if axis == 0:
-		rot = Vector3(0.0, 0.0, 90.0)
-	elif axis == 2:
-		rot = Vector3(90.0, 0.0, 0.0)
-	mi.rotation_degrees = rot
-	add_child(mi)
-	var cs := CollisionShape3D.new()
-	var shape := CylinderShape3D.new()
-	shape.radius = radius
-	shape.height = length
-	cs.shape = shape
-	cs.position = center
-	cs.rotation_degrees = rot
-	_geometry.add_child(cs)
-
-
-func _add_sphere(center: Vector3, radius: float, mat: Material) -> void:
-	var mi := MeshInstance3D.new()
-	var sm := SphereMesh.new()
-	sm.radius = radius
-	sm.height = radius * 2.0
-	sm.radial_segments = 24
-	sm.rings = 12
-	mi.mesh = sm
-	mi.material_override = mat
-	mi.position = center
-	add_child(mi)
-	var cs := CollisionShape3D.new()
-	var shape := SphereShape3D.new()
-	shape.radius = radius
-	cs.shape = shape
-	cs.position = center
-	_geometry.add_child(cs)
+	var body := StaticBody3D.new()
+	body.name = "ArenaBody"
+	body.collision_layer = 1
+	body.collision_mask = 0
+	var collider := CollisionShape3D.new()
+	collider.name = "ArenaCollider"
+	collider.shape = mesh.create_trimesh_shape()
+	body.add_child(collider)
+	add_child(body)
 
 
 func _build_goals() -> void:
-	for s: float in [-1.0, 1.0]:
-		var goal := GOAL_SCENE.instantiate() as Goal
-		goal.defending_team = 1 if s < 0.0 else 2
-		goal.goal_width = GOAL_WIDTH
-		goal.goal_height = GOAL_HEIGHT
-		goal.goal_depth = GOAL_DEPTH
-		goal.position = Vector3(0.0, 0.0, s * HALF_EXTENTS.z)
-		if s < 0.0:
+	for team: int in [0, 1]:
+		var goal := Goal.new()
+		goal.name = "GoalBlue" if team == 0 else "GoalOrange"
+		var color := Color(0.15, 0.45, 1.0) if team == 0 else Color(1.0, 0.42, 0.1)
+		goal.setup(team, color)
+		var depth: float = goal.depth
+		if team == 0:
+			goal.position = Vector3(-half_extents.x + depth * 0.5 - 0.1, 0.0, 0.0)
+		else:
+			goal.position = Vector3(half_extents.x - depth * 0.5 + 0.1, 0.0, 0.0)
 			goal.rotation.y = PI
 		add_child(goal)
-		goals.append(goal)
 
 
 func _build_pads() -> void:
-	if rules == null or not rules.boost_pads_enabled:
-		return
-	_pad_root = Node3D.new()
-	_pad_root.name = "BoostPads"
-	add_child(_pad_root)
-	_pad_layout = _make_pad_layout()
-	var large_transforms: Array[Transform3D] = []
-	var small_transforms: Array[Transform3D] = []
-	var id := 0
-	for entry: Dictionary in _pad_layout:
-		var pad := PAD_SCENE.instantiate() as BoostPad
-		pad.pad_id = id
-		pad.large = bool(entry["large"])
-		pad.amount = rules.boost_pad_amount_large if pad.large else rules.boost_pad_amount_small
-		pad.respawn_time = rules.large_pad_respawn if pad.large else rules.small_pad_respawn
-		pad.surface_normal = entry["normal"]
-		pad.transform = Transform3D(_basis_from_up(entry["normal"]), entry["pos"])
-		pad.set_meta("shared_visual", true)
-		_pad_root.add_child(pad)
-		pads.append(pad)
-		var index: int = large_transforms.size() if pad.large else small_transforms.size()
-		if pad.large:
-			large_transforms.append(pad.transform)
-		else:
-			small_transforms.append(pad.transform)
-		_pad_indices[id] = {"large": pad.large, "index": index}
-		_pad_transforms[id] = pad.transform
-		pad.collected.connect(_on_pad_collected)
-		pad.respawned.connect(_on_pad_respawned)
-		id += 1
-	_build_pad_multimesh("large", large_transforms)
-	_build_pad_multimesh("small", small_transforms)
-
-
-## Pads are visual-only meshes over Area3D pickups. Two MultiMesh instances
-## replace 34 draw calls and 34 per-pad scripts while keeping collision exact.
-func _build_pad_multimesh(kind: String, transforms: Array[Transform3D]) -> void:
-	if transforms.is_empty():
-		return
-	var large: bool = kind == "large"
-	var mesh := CylinderMesh.new()
-	mesh.top_radius = 1.8 if large else 1.1
-	mesh.bottom_radius = mesh.top_radius
-	mesh.height = 0.22
-	mesh.radial_segments = 20 if large else 12
-	mesh.rings = 1
-	var material := StandardMaterial3D.new()
-	var color := Color(1.0, 0.62, 0.1) if large else Color(0.1, 0.85, 1.0)
-	material.albedo_color = color
-	material.emission_enabled = true
-	material.emission = color
-	material.emission_energy_multiplier = 2.0 if large else 1.2
-	material.metallic = 0.2
-	material.roughness = 0.4
-	var multimesh := MultiMesh.new()
-	multimesh.transform_format = MultiMesh.TRANSFORM_3D
-	multimesh.mesh = mesh
-	multimesh.instance_count = transforms.size()
-	for i in transforms.size():
-		multimesh.set_instance_transform(i, transforms[i])
-	var view := MultiMeshInstance3D.new()
-	view.name = "PadMultiMesh%s" % kind.capitalize()
-	view.multimesh = multimesh
-	view.material_override = material
-	view.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	view.custom_aabb = AABB(-HALF_EXTENTS - Vector3.ONE * 3.0, HALF_EXTENTS * 2.0 + Vector3.ONE * 6.0)
-	add_child(view)
-	_pad_multimeshes[kind] = view
-	_pad_materials[kind] = material
-
-
-func _process(delta: float) -> void:
-	if _pad_materials.is_empty():
-		return
-	_pad_pulse += delta
-	for kind: String in _pad_materials.keys():
-		var material := _pad_materials[kind] as StandardMaterial3D
-		if material != null:
-			var base: float = 2.0 if kind == "large" else 1.2
-			material.emission_energy_multiplier = base + sin(_pad_pulse * (3.0 if kind == "large" else 2.0)) * 0.35
-
-
-func _on_pad_collected(pad_id: int, _car_id: int) -> void:
-	_hide_shared_pad(pad_id, true)
-
-
-func _on_pad_respawned(pad_id: int) -> void:
-	_hide_shared_pad(pad_id, false)
-
-
-func _hide_shared_pad(pad_id: int, hidden: bool) -> void:
-	var entry: Dictionary = _pad_indices.get(pad_id, {})
-	if entry.is_empty():
-		return
-	_pad_hidden[pad_id] = hidden
-	var kind: String = "large" if bool(entry["large"]) else "small"
-	var view := _pad_multimeshes.get(kind) as MultiMeshInstance3D
-	if view == null or view.multimesh == null:
-		return
-	var index: int = int(entry["index"])
-	var transform: Transform3D = _pad_transforms[pad_id]
-	if hidden:
-		transform.basis = transform.basis.scaled(Vector3.ONE * 0.001)
-	view.multimesh.set_instance_transform(index, transform)
-
-
-func is_pad_hidden(pad_id: int) -> bool:
-	return bool(_pad_hidden.get(pad_id, false))
-
-
-## 6 large + 28 small, mirror symmetric across X and Z (goal axis).
-func _make_pad_layout() -> Array[Dictionary]:
-	var h := HALF_EXTENTS
-	var layout: Array[Dictionary] = []
-	# Large pads.
-	layout.append(_pad_entry(Vector3(0.0, -h.y, 0.0), Vector3.UP, true))
-	layout.append(_pad_entry(Vector3(0.0, h.y, 0.0), Vector3.DOWN, true))
-	layout.append(_pad_entry(Vector3(-h.x, 0.0, 0.0), Vector3.RIGHT, true))
-	layout.append(_pad_entry(Vector3(h.x, 0.0, 0.0), Vector3.LEFT, true))
-	layout.append(_pad_entry(Vector3(0.0, 11.0, -h.z), Vector3.BACK, true))
-	layout.append(_pad_entry(Vector3(0.0, 11.0, h.z), Vector3.FORWARD, true))
-	# 8 small on floor, mirrored on ceiling.
-	for x: float in [-12.0, 12.0]:
-		for z: float in [-30.0, -12.0, 12.0, 30.0]:
-			layout.append(_pad_entry(Vector3(x, -h.y, z), Vector3.UP, false))
-			layout.append(_pad_entry(Vector3(x, h.y, z), Vector3.DOWN, false))
-	# 4 small on each long wall.
-	for x: float in [-h.x, h.x]:
-		var n: Vector3 = Vector3.RIGHT if x < 0.0 else Vector3.LEFT
-		for y: float in [-7.0, 7.0]:
-			for z: float in [-20.0, 20.0]:
-				layout.append(_pad_entry(Vector3(x, y, z), n, false))
-	# 2 small above each goal.
-	for z: float in [-h.z, h.z]:
-		var n2: Vector3 = Vector3.BACK if z < 0.0 else Vector3.FORWARD
-		for x: float in [-14.0, 14.0]:
-			layout.append(_pad_entry(Vector3(x, 10.0, z), n2, false))
-	return layout
-
-
-func _pad_entry(surface_point: Vector3, normal: Vector3, large: bool) -> Dictionary:
-	return {"pos": surface_point + normal * 0.12, "normal": normal, "large": large}
-
-
-func _basis_from_up(up: Vector3) -> Basis:
-	var y := up.normalized()
-	var ref := Vector3.FORWARD if absf(y.dot(Vector3.FORWARD)) < 0.9 else Vector3.RIGHT
-	var x := ref.cross(y).normalized()
-	var z := x.cross(y).normalized()
-	return Basis(x, y, z)
-
-
-func _build_spawn_markers() -> void:
-	spawn_markers.clear()
-	var xs := [-9.0, 0.0, 9.0]
-	for team in [1, 2]:
-		for i in 3:
-			var side: float = -1.0 if team == 1 else 1.0
-			var forward := Vector3(0.0, 0.0, -side)
-			var pos := Vector3(xs[i], -HALF_EXTENTS.y + SPAWN_HEIGHT, side * (HALF_EXTENTS.z - 5.0))
-			spawn_markers.append(Transform3D(_basis_facing(forward, GravityManager.up), pos))
-
-
-func _basis_facing(forward: Vector3, up: Vector3) -> Basis:
-	var y := up.normalized()
-	var z := -forward.normalized()
-	var x := y.cross(z).normalized()
-	z = x.cross(y).normalized()
-	return Basis(x, y, z)
-
-
-func get_spawn_transform(team: int, index: int) -> Transform3D:
-	var base: int = 0 if team == 1 else 3
-	var idx: int = base + clampi(index, 0, 2)
-	if idx < spawn_markers.size():
-		return spawn_markers[idx]
-	return Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, 30.0))
-
-
-func get_ball_spawn() -> Vector3:
-	return Vector3.ZERO
-
-
-func is_position_inside(pos: Vector3, margin: float = 0.0) -> bool:
-	var h := HALF_EXTENTS
-	return absf(pos.x) < h.x + margin and absf(pos.y) < h.y + margin and absf(pos.z) < h.z + margin
-
-
-func is_pad_layout_symmetric(epsilon: float = 0.05) -> bool:
-	if _pad_layout.is_empty():
-		_pad_layout = _make_pad_layout()
-	for entry: Dictionary in _pad_layout:
-		var p: Vector3 = entry["pos"]
-		var mirrored := [Vector3(-p.x, p.y, p.z), Vector3(p.x, p.y, -p.z), Vector3(-p.x, p.y, -p.z)]
-		for m: Vector3 in mirrored:
-			var found := false
-			for other: Dictionary in _pad_layout:
-				if bool(other["large"]) != bool(entry["large"]):
-					continue
-				if (other["pos"] as Vector3).distance_to(m) <= epsilon:
-					found = true
-					break
-			if not found:
-				return false
-	return true
-
-
-func pad_layout() -> Array[Dictionary]:
-	if _pad_layout.is_empty():
-		_pad_layout = _make_pad_layout()
-	return _pad_layout
+	for entry: Dictionary in pad_layout(half_extents, fillet_radius):
+		var pad := BoostPad.new()
+		pad.name = "BoostPad"
+		pad.setup(
+			entry["position"] as Vector3,
+			entry["normal"] as Vector3,
+			bool(entry["large"])
+		)
+		add_child(pad)
 
 
 func _build_environment() -> void:
 	var world_env := WorldEnvironment.new()
+	world_env.name = "WorldEnvironment"
 	var env := Environment.new()
 	env.background_mode = Environment.BG_SKY
 	var sky := Sky.new()
 	var sky_mat := ProceduralSkyMaterial.new()
-	sky_mat.sky_top_color = theme.sky_top
-	sky_mat.sky_horizon_color = theme.sky_bottom
-	sky_mat.ground_bottom_color = theme.sky_top
-	sky_mat.ground_horizon_color = theme.sky_bottom
-	sky_mat.sun_angle_max = 18.0
+	sky_mat.sky_top_color = Color(0.06, 0.09, 0.16)
+	sky_mat.sky_horizon_color = Color(0.16, 0.18, 0.24)
+	sky_mat.ground_bottom_color = Color(0.03, 0.03, 0.05)
+	sky_mat.ground_horizon_color = Color(0.12, 0.12, 0.16)
 	sky.sky_material = sky_mat
 	env.sky = sky
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	env.ambient_light_color = theme.ambient_color
-	env.ambient_light_energy = theme.ambient_energy
-	env.tonemap_mode = Environment.TONE_MAPPER_ACES
-	env.glow_enabled = true
-	env.glow_intensity = 0.7
-	env.glow_bloom = 0.12
-	env.fog_enabled = theme.fog_enabled
-	env.fog_light_color = theme.sky_bottom
-	env.fog_density = theme.fog_density
+	env.ambient_light_energy = 0.9
+	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
 	world_env.environment = env
 	add_child(world_env)
-	# One interior probe captures the emissive trim and goal accents for the car
-	# and ball PBR materials without a costly per-frame update.
-	var probe := ReflectionProbe.new()
-	probe.name = "ArenaReflectionProbe"
-	probe.size = Vector3(HALF_EXTENTS.x * 2.0, HALF_EXTENTS.y * 2.0, HALF_EXTENTS.z * 2.0)
-	probe.interior = true
-	probe.box_projection = true
-	probe.update_mode = ReflectionProbe.UPDATE_ONCE
-	add_child(probe)
+
 	var sun := DirectionalLight3D.new()
 	sun.name = "Sun"
 	sun.rotation_degrees = Vector3(-58.0, -38.0, 0.0)
-	sun.light_color = Color(1.0, 0.96, 0.9)
-	sun.light_energy = theme.sun_energy
+	sun.light_energy = 1.25
 	sun.shadow_enabled = true
-	sun.directional_shadow_max_distance = 120.0
 	add_child(sun)
+
 	var fill := OmniLight3D.new()
-	fill.name = "FillLight"
+	fill.name = "ArenaFill"
 	fill.position = Vector3(0.0, 0.0, 0.0)
-	fill.light_color = theme.trim_color
-	fill.light_energy = 0.6
-	fill.omni_range = 90.0
+	fill.omni_range = 55.0
+	fill.light_energy = 1.1
+	fill.light_color = Color(0.6, 0.75, 1.0)
 	add_child(fill)
-	for s: float in [-1.0, 1.0]:
-		var accent := OmniLight3D.new()
-		accent.name = "AccentLight%s" % ("A" if s < 0.0 else "B")
-		accent.position = Vector3(s * 17.0, 8.0, 0.0)
-		accent.light_color = theme.accent_color
-		accent.light_energy = 0.42
-		accent.omni_range = 34.0
-		accent.shadow_enabled = false
-		add_child(accent)
+
+
+## Build the inward-facing rounded-box surface. Six flat insets + twelve
+## quarter-cylinder edge strips + eight spherical corner octants.
+func generate_shell_mesh(half: Vector3, radius: float) -> ArrayMesh:
+	var r: float = clampf(radius, 0.05, minf(half.x, minf(half.y, half.z)) * 0.49)
+	var h: Array[float] = [half.x, half.y, half.z]
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	# Flat faces.
+	for axis: int in 3:
+		for sign_value: int in [-1, 1]:
+			var u_axis: int = (axis + 1) % 3
+			var v_axis: int = (axis + 2) % 3
+			var eu: float = h[u_axis] - r
+			var ev: float = h[v_axis] - r
+			var n: Vector3 = AXES[axis] * float(sign_value)
+			var center: Vector3 = n * h[axis]
+			var corners: Array[Vector3] = [
+				center - AXES[u_axis] * eu - AXES[v_axis] * ev,
+				center + AXES[u_axis] * eu - AXES[v_axis] * ev,
+				center + AXES[u_axis] * eu + AXES[v_axis] * ev,
+				center - AXES[u_axis] * eu + AXES[v_axis] * ev,
+			]
+			var normals: Array[Vector3] = [-n, -n, -n, -n]
+			_add_quad(st, corners, normals)
+
+	# Twelve edge fillets.
+	for i: int in 3:
+		for j: int in range(i + 1, 3):
+			var k: int = 3 - i - j
+			for si: int in [-1, 1]:
+				for sj: int in [-1, 1]:
+					var center := Vector3.ZERO
+					center[i] = float(si) * (h[i] - r)
+					center[j] = float(sj) * (h[j] - r)
+					var ek: float = h[k] - r
+					var steps: int = 6
+					for a: int in steps:
+						var phi0: float = TAU * 0.25 * float(a) / float(steps)
+						var phi1: float = TAU * 0.25 * float(a + 1) / float(steps)
+						var corners: Array[Vector3] = [
+							_edge_point(center, i, j, k, si, sj, phi0, -ek, r),
+							_edge_point(center, i, j, k, si, sj, phi0, ek, r),
+							_edge_point(center, i, j, k, si, sj, phi1, ek, r),
+							_edge_point(center, i, j, k, si, sj, phi1, -ek, r),
+						]
+						var normals: Array[Vector3] = [
+							-_edge_dir(i, j, si, sj, phi0),
+							-_edge_dir(i, j, si, sj, phi0),
+							-_edge_dir(i, j, si, sj, phi1),
+							-_edge_dir(i, j, si, sj, phi1),
+						]
+						_add_quad(st, corners, normals)
+
+	# Eight spherical corner patches.
+	var c_steps: int = 5
+	for sx: int in [-1, 1]:
+		for sy: int in [-1, 1]:
+			for sz: int in [-1, 1]:
+				var center := Vector3(
+					float(sx) * (half.x - r),
+					float(sy) * (half.y - r),
+					float(sz) * (half.z - r)
+				)
+				for a: int in c_steps:
+					var u0: float = TAU * 0.25 * float(a) / float(c_steps)
+					var u1: float = TAU * 0.25 * float(a + 1) / float(c_steps)
+					for b: int in c_steps:
+						var v0: float = TAU * 0.25 * float(b) / float(c_steps)
+						var v1: float = TAU * 0.25 * float(b + 1) / float(c_steps)
+						var corners: Array[Vector3] = [
+							center + _corner_dir(sx, sy, sz, u0, v0) * r,
+							center + _corner_dir(sx, sy, sz, u1, v0) * r,
+							center + _corner_dir(sx, sy, sz, u1, v1) * r,
+							center + _corner_dir(sx, sy, sz, u0, v1) * r,
+						]
+						var normals: Array[Vector3] = [
+							-_corner_dir(sx, sy, sz, u0, v0),
+							-_corner_dir(sx, sy, sz, u1, v0),
+							-_corner_dir(sx, sy, sz, u1, v1),
+							-_corner_dir(sx, sy, sz, u0, v1),
+						]
+						_add_quad(st, corners, normals)
+
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.23, 0.25, 0.31)
+	mat.metallic = 0.55
+	mat.roughness = 0.35
+	st.set_material(mat)
+	return st.commit()
+
+
+func _edge_point(
+	center: Vector3,
+	i: int,
+	j: int,
+	k: int,
+	si: int,
+	sj: int,
+	phi: float,
+	offset: float,
+	radius: float
+) -> Vector3:
+	return center + _edge_dir(i, j, si, sj, phi) * radius + AXES[k] * offset
+
+
+func _edge_dir(i: int, j: int, si: int, sj: int, phi: float) -> Vector3:
+	return (AXES[i] * (float(si) * cos(phi)) + AXES[j] * (float(sj) * sin(phi))).normalized()
+
+
+func _corner_dir(sx: int, sy: int, sz: int, u: float, v: float) -> Vector3:
+	return Vector3(
+		float(sx) * cos(u),
+		float(sy) * sin(u) * cos(v),
+		float(sz) * sin(u) * sin(v)
+	).normalized()
+
+
+func _add_quad(
+	st: SurfaceTool, positions: Array[Vector3], normals: Array[Vector3]
+) -> void:
+	var cross: Vector3 = (positions[1] - positions[0]).cross(positions[3] - positions[0])
+	var avg_normal: Vector3 = (normals[0] + normals[1] + normals[2] + normals[3]).normalized()
+	if cross.dot(avg_normal) < 0.0:
+		var p_tmp: Vector3 = positions[1]
+		positions[1] = positions[3]
+		positions[3] = p_tmp
+		var n_tmp: Vector3 = normals[1]
+		normals[1] = normals[3]
+		normals[3] = n_tmp
+
+	var order: Array[int] = [0, 1, 2, 0, 2, 3]
+	for idx: int in order:
+		st.set_normal(normals[idx])
+		st.add_vertex(positions[idx])
+
+
+func get_spawn_transform(team: int, slot: int = 0) -> Transform3D:
+	var floor_y: float = -half_extents.y + 1.0
+	var z_positions: Array[float] = [-6.0, 0.0, 6.0]
+	var z: float = z_positions[slot % z_positions.size()]
+	var x: float = -half_extents.x + 6.0 if team == 0 else half_extents.x - 6.0
+	var forward: Vector3 = Vector3.RIGHT if team == 0 else Vector3.LEFT
+	return transform_from_up_forward(Vector3(x, floor_y, z), Vector3.UP, forward)
+
+
+static func transform_from_up_forward(pos: Vector3, up: Vector3, forward: Vector3) -> Transform3D:
+	var up_n: Vector3 = up.normalized()
+	var fwd: Vector3 = forward - up_n * forward.dot(up_n)
+	if fwd.length_squared() < 0.0001:
+		fwd = Vector3.FORWARD
+	fwd.normalize()
+	var z_axis: Vector3 = -fwd
+	var x_axis: Vector3 = up_n.cross(z_axis).normalized()
+	return Transform3D(Basis(x_axis, up_n, z_axis), pos)
+
+
+## 6 large pads + 28 small pads. The pattern is identical on all four
+## gravity-rotatable faces, so the layout is mirror symmetric.
+static func pad_layout(half: Vector3, r: float) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	var inward_normals: Array[Vector3] = [
+		Vector3.UP, Vector3.DOWN, Vector3.BACK, Vector3.FORWARD,
+	]
+	for n: Vector3 in inward_normals:
+		var vertical: bool = absf(n.y) < 0.5
+		var extent_n: float = half.z if vertical else half.y
+		var e_u: float = half.x - r - 2.0
+		var e_v: float = (half.y if vertical else half.z) - r - 2.0
+		var u_axis: Vector3 = Vector3.RIGHT
+		var v_axis: Vector3 = Vector3.UP if vertical else Vector3.BACK
+		var surface_point: Vector3 = -n * extent_n + n * 0.35
+
+		var large_uv: Array[Vector2] = (
+			[Vector2(0.0, 0.0)]
+			if vertical
+			else [Vector2(-0.5, 0.0), Vector2(0.5, 0.0)]
+		)
+		for uv: Vector2 in large_uv:
+			result.append({
+				"position": surface_point + u_axis * uv.x * e_u + v_axis * uv.y * e_v,
+				"normal": n,
+				"large": true,
+			})
+
+		var small_uv: Array[Vector2] = [
+			Vector2(-0.55, 0.0),
+			Vector2(0.55, 0.0),
+			Vector2(-0.25, 0.55),
+			Vector2(0.25, 0.55),
+			Vector2(-0.25, -0.55),
+			Vector2(0.25, -0.55),
+			Vector2(0.0, 0.28),
+		]
+		for uv: Vector2 in small_uv:
+			result.append({
+				"position": surface_point + u_axis * uv.x * e_u + v_axis * uv.y * e_v,
+				"normal": n,
+				"large": false,
+			})
+	return result

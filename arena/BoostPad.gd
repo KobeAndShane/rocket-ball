@@ -1,121 +1,88 @@
 class_name BoostPad
 extends Area3D
-## Pickup pad. Small pads respawn fast, large pads give full boost.
+## Boost pickup. Lives on any arena surface; the car layer triggers it.
+## Large pads give 100 boost / 10 s respawn, small pads 12 boost / 4 s.
 
-signal collected(pad_id: int, car_id: int)
-signal respawned(pad_id: int)
-
-const CAR_LAYER := 1 << 1
-const PAD_LAYER := 1 << 3
-
-@export var pad_id: int = 0
 @export var large: bool = false
-@export var amount: float = 12.0
-@export var respawn_time: float = 4.0
-@export var surface_normal: Vector3 = Vector3.UP
 
-var active: bool = true
+var inward_normal: Vector3 = Vector3.UP
+var respawn_time: float = 4.0
+var boost_amount: float = 12.0
+var _active: bool = true
 var _timer: float = 0.0
 var _mesh: MeshInstance3D
-var _shape: CollisionShape3D
-var _material: StandardMaterial3D
-var _pulse: float = 0.0
 
 
-func _ready() -> void:
-	collision_layer = PAD_LAYER
-	collision_mask = CAR_LAYER
+func setup(p_position: Vector3, p_inward_normal: Vector3, p_large: bool) -> void:
+	position = p_position
+	inward_normal = p_inward_normal.normalized()
+	large = p_large
+	respawn_time = 10.0 if large else 4.0
+	boost_amount = 100.0 if large else 12.0
+	collision_layer = 8
+	collision_mask = 2
 	monitoring = true
-	monitorable = false
+	monitorable = true
+	add_to_group("boost_pads")
+	set_process(false)
+
+	var radius: float = 1.6 if large else 0.9
+	var shape := BoxShape3D.new()
+	shape.size = Vector3(radius * 2.0, 1.2, radius * 2.0)
+	var collider := CollisionShape3D.new()
+	collider.name = "PadTrigger"
+	collider.shape = shape
+	add_child(collider)
+
+	_mesh = MeshInstance3D.new()
+	_mesh.name = "PadMesh"
+	var cylinder := CylinderMesh.new()
+	cylinder.top_radius = radius
+	cylinder.bottom_radius = radius
+	cylinder.height = 0.08
+	cylinder.radial_segments = 20
+	_mesh.mesh = cylinder
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(1.0, 0.55, 0.05) if large else Color(1.0, 0.85, 0.15)
+	mat.emission_enabled = true
+	mat.emission = mat.albedo_color
+	mat.emission_energy_multiplier = 2.0 if large else 1.2
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_color.a = 0.85
+	_mesh.material_override = mat
+	add_child(_mesh)
+
+	# Local +Y points into the arena, away from the surface.
+	var quat := Quaternion(Vector3.UP, inward_normal)
+	basis = Basis(quat)
 	body_entered.connect(_on_body_entered)
-	_mesh = get_node_or_null("PadMesh") as MeshInstance3D
-	_shape = get_node_or_null("CollisionShape3D") as CollisionShape3D
-	_apply_size()
-	_material = StandardMaterial3D.new()
-	var color := Color(1.0, 0.62, 0.1) if large else Color(0.1, 0.85, 1.0)
-	_material.albedo_color = color
-	_material.emission_enabled = true
-	_material.emission = color
-	_material.emission_energy_multiplier = 2.0 if large else 1.2
-	_material.metallic = 0.2
-	_material.roughness = 0.4
-	if _mesh != null:
-		_mesh.material_override = _material
-	# Arena renders all pads through two MultiMesh instances. Standalone pads
-	# (tests, editor) keep their own mesh.
-	if bool(get_meta("shared_visual", false)):
-		if _mesh != null:
-			_mesh.visible = false
-		set_process(false)
 
 
-func _apply_size() -> void:
-	var radius: float = 1.8 if large else 1.1
-	if _mesh != null and _mesh.mesh is CylinderMesh:
-		var cm := _mesh.mesh as CylinderMesh
-		cm.top_radius = radius
-		cm.bottom_radius = radius
-		cm.height = 0.22
-	if _shape != null and _shape.shape is CylinderShape3D:
-		var cs := _shape.shape as CylinderShape3D
-		cs.radius = radius
-		cs.height = 0.5
-
-
-func _physics_process(delta: float) -> void:
-	if active:
+func _process(delta: float) -> void:
+	if _active:
 		return
 	_timer -= delta
 	if _timer <= 0.0:
 		_respawn()
 
 
-func _process(delta: float) -> void:
-	if not active or _mesh == null:
+func _on_body_entered(body: Node3D) -> void:
+	if not _active:
 		return
-	_pulse += delta * (3.0 if large else 2.0)
-	var energy: float = (1.6 if large else 1.0) + sin(_pulse) * 0.35
-	if _material != null:
-		_material.emission_energy_multiplier = energy
-
-
-func _on_body_entered(body: Node) -> void:
-	if not active or not (body is Car):
-		return
-	collect(body as Car)
-
-
-func collect(car: Car) -> void:
-	if not active:
-		return
-	if car.boost_component != null:
-		car.boost_component.add(amount, large)
-	active = false
-	_timer = respawn_time
-	visible = false
-	# Area3D forbids direct monitoring changes inside its own signal callback.
-	set_deferred("monitoring", false)
-	if _shape != null:
-		_shape.set_deferred("disabled", true)
-	Events.pad_collected.emit(pad_id, car.car_id)
-	collected.emit(pad_id, car.car_id)
+	if body is Car:
+		var car := body as Car
+		if car.boost != null:
+			car.boost.add(boost_amount)
+			Events.event_feed.emit("+%d boost" % int(boost_amount))
+		_active = false
+		_timer = respawn_time
+		monitoring = false
+		_mesh.visible = false
+		set_process(true)
 
 
 func _respawn() -> void:
-	active = true
-	_timer = 0.0
-	visible = true
-	set_deferred("monitoring", true)
-	if _shape != null:
-		_shape.set_deferred("disabled", false)
-	Events.pad_respawned.emit(pad_id)
-	respawned.emit(pad_id)
-
-
-func reset() -> void:
-	active = true
-	_timer = 0.0
-	visible = true
-	set_deferred("monitoring", true)
-	if _shape != null:
-		_shape.set_deferred("disabled", false)
+	_active = true
+	monitoring = true
+	_mesh.visible = true
+	set_process(false)
