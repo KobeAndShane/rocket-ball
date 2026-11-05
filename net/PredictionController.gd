@@ -101,11 +101,10 @@ func _replay(pos: Vector3, vel: Vector3, rot: Quaternion, inputs: Array[CarInput
 			v += forward * tuning.boost_force / maxf(tuning.mass, 1.0) * dt
 		if input.jump_pressed:
 			v += up * tuning.jump_velocity
-		# Cheap steering prediction around local up. Positive steer is right,
-		# matching Car's ground steering (-yaw about the surface normal).
+		# Cheap steering prediction around local up.
 		if absf(input.steer) > 0.01 and speed > 1.0:
 			var yaw_axis: Vector3 = up
-			var angle: float = -input.steer * tuning.turn_rate_high * dt * clampf(speed / tuning.max_speed, 0.25, 1.0)
+			var angle: float = input.steer * tuning.turn_rate_high * dt * clampf(speed / tuning.max_speed, 0.25, 1.0)
 			q = Quaternion(yaw_axis, angle) * q
 		var cap: float = tuning.boost_max_speed if input.boost else tuning.max_speed
 		if v.length() > cap:

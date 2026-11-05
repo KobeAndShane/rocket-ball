@@ -35,11 +35,7 @@ func setup(car_ref: Car, ball_ref: Ball, arena_ref: Arena, tier_ref: BotTier, al
 	tier = tier_ref if tier_ref != null else BOT_TIERS.get_tier(1)
 	allies = allies_ref
 	opponents = opponents_ref
-	# Seed by spawn slot, not car id, so the two teams get equivalent bot
-	# personalities. Car ids are assigned team-by-team, which would otherwise
-	# give one side a fixed RNG advantage in balance sampling.
-	var slot: int = int(car.get_meta("spawn_index", car.car_id))
-	_rng.seed = 9187 + slot * 7919
+	_rng.seed = 9187 + car.car_id * 7919
 	_last_ball_pos = ball.global_position if ball != null else Vector3.ZERO
 	_decision_timer = _rng.randf_range(0.0, 0.1)
 	_ball_history.clear()
@@ -71,7 +67,6 @@ func _decide() -> void:
 	var height: float = ball_delta.dot(up)
 	var flat_dist: float = (ball_delta - up * height).length()
 	var own_goal := _own_goal()
-	var opp_goal := _opponent_goal()
 	var closest := _is_closest_to_ball(predicted)
 	_update_role(predicted)
 	_want_jump = false
@@ -83,11 +78,10 @@ func _decide() -> void:
 		target = own_goal.global_position + to_ball * (8.0 + tier.defend_bias * 5.0)
 		new_mode = Mode.DEFEND
 	elif role == Role.SUPPORT and own_goal != null:
-		# Second attacker: stay offset from the primary striker but still drive
-		# through the ball toward the opponent goal instead of parking midway.
+		var mid: Vector3 = ball.global_position.lerp(own_goal.global_position, 0.35)
 		var lateral: Vector3 = up.cross(ball.global_position - car.global_position).normalized()
-		target = predicted + lateral * 4.0
-		new_mode = Mode.CHASE
+		target = mid + lateral * (5.0 + tier.defend_bias * 3.0)
+		new_mode = Mode.ROTATE_BACK
 	elif not closest and new_mode != Mode.GRAB_BOOST:
 		if own_goal != null:
 			var to_ball: Vector3 = (ball.global_position - own_goal.global_position).normalized()
@@ -106,21 +100,6 @@ func _decide() -> void:
 		if pad != null:
 			target = pad.global_position
 			new_mode = Mode.GRAB_BOOST
-
-	# Striker approach: get behind the ball relative to the opponent goal, then
-	# drive through it. Chasing the ball directly makes bots bump it sideways
-	# and never score, which also makes bot-based balance sampling useless.
-	if new_mode == Mode.CHASE and opp_goal != null:
-		var to_goal: Vector3 = opp_goal.global_position - predicted
-		to_goal -= up * to_goal.dot(up)
-		if to_goal.length_squared() > 0.01:
-			to_goal = to_goal.normalized()
-			var behind_offset: float = 2.2 + clampf(car.get_speed() * 0.12, 0.0, 3.5)
-			var goal_side: float = (car.global_position - predicted).dot(to_goal)
-			if goal_side > -1.5:
-				target = predicted - to_goal * behind_offset
-			else:
-				target = predicted
 
 	# Aerial attempt when the ball is above the drivable plane and close.
 	if height > 3.2 and flat_dist < 13.0 and tier.aerial_skill > 0.15:
@@ -226,15 +205,6 @@ func _own_goal() -> Goal:
 	return null
 
 
-func _opponent_goal() -> Goal:
-	if arena == null:
-		return null
-	for goal: Goal in arena.goals:
-		if goal.defending_team != car.team:
-			return goal
-	return null
-
-
 func _nearest_pad() -> BoostPad:
 	if arena == null:
 		return null
@@ -292,6 +262,10 @@ func _drive(delta: float) -> void:
 		if mode == Mode.CHASE and dist > 8.0 and car.boost_component != null and car.boost_component.amount > 8.0 and facing > 0.72:
 			if _rng.randf() < tier.boost_use:
 				_input.boost = true
+		# Small hop when a pad or the ball requires a jump.
+		if dist < 5.0 and _jump_cooldown <= 0.0 and _rng.randf() < tier.aggression * 0.4:
+			_input.jump_pressed = true
+			_jump_cooldown = 0.4
 	else:
 		_input.steer = clampf(local.x * 2.0, -1.0, 1.0)
 		_input.yaw = _input.steer

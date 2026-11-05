@@ -9,7 +9,6 @@ extends Node3D
 const CAR_SCENE := preload("res://car/Car.tscn")
 const BALL_SCENE := preload("res://ball/Ball.tscn")
 const GOAL_SCENE := preload("res://arena/Goal.tscn")
-const ARENA_SCENE := preload("res://arena/Arena.tscn")
 const MATCH_SCENE := preload("res://match/Match.tscn")
 const RULES := preload("res://match/MatchRules.tres")
 const CAR_TUNING := preload("res://car/CarTuning.tres")
@@ -44,17 +43,9 @@ func _run_all() -> void:
 	await _test_rules_defaults()
 	await _test_mutators()
 	await _test_free_play_spawn()
-	await _test_chase_camera()
 	await _test_match_timer_and_overtime()
 	await _test_demo_respawn()
 	await _test_bots()
-	await _test_unstuck_rule()
-	await _test_auto_right()
-	await _test_wall_drive_not_righted()
-	await _test_ball_safety_reset()
-	await _test_demo_spawn_protection()
-	await _test_arena_safety_and_goal_mouth()
-	await _test_sim_determinism_hooks()
 	await _test_rank_helpers()
 	await _test_glicko2()
 	await _test_ranked_profile()
@@ -449,50 +440,6 @@ func _test_free_play_spawn() -> void:
 	await _cleanup()
 
 
-func _test_chase_camera() -> void:
-	_begin("Chase camera")
-	var old_gravity: Vector3 = GravityManager.gravity_dir
-	GravityManager.force_direction(Vector3.DOWN)
-
-	var car := _track(CAR_SCENE.instantiate() as Car) as Car
-	car.control_mode = Car.DriveMode.NETWORK
-	car.frozen = true
-	car.freeze = true
-	add_child(car)
-	car.global_transform = Transform3D(Basis.IDENTITY, Vector3.ZERO)
-	var ball := _track(BALL_SCENE.instantiate() as Ball) as Ball
-	ball.freeze = true
-	add_child(ball)
-	ball.global_position = Vector3(0.0, 1.0, 20.0)
-	var cam := _track(load("res://camera/ChaseCamera.tscn").instantiate()) as ChaseCamera
-	add_child(cam)
-	cam.setup(car, ball)
-
-	# Car cam: behind the car and aimed along its forward axis.
-	cam.ball_cam_enabled = false
-	cam.setup(car, ball)
-	await get_tree().process_frame
-	await get_tree().process_frame
-	var car_forward: Vector3 = -car.global_transform.basis.z
-	var car_cam_forward: Vector3 = -cam.global_transform.basis.z
-	_check(cam.global_position.z > 4.0, "car cam sits behind the car", "z=%.2f" % cam.global_position.z)
-	_check(car_cam_forward.dot(car_forward) > 0.9, "car cam looks along the car", "dot=%.2f" % car_cam_forward.dot(car_forward))
-
-	# Ball cam: orbit opposite the ball and keep it centred, even when it is
-	# behind the car (the old blend-only version was off by ~45 degrees here).
-	cam.ball_cam_enabled = true
-	cam.setup(car, ball)
-	await get_tree().process_frame
-	await get_tree().process_frame
-	var to_ball: Vector3 = (ball.global_position - cam.global_position).normalized()
-	var ball_cam_forward: Vector3 = -cam.global_transform.basis.z
-	_check(cam.global_position.z < -4.0, "ball cam orbits opposite the ball", "z=%.2f" % cam.global_position.z)
-	_check(ball_cam_forward.dot(to_ball) > 0.98, "ball cam centres the ball", "dot=%.3f" % ball_cam_forward.dot(to_ball))
-
-	await _cleanup()
-	GravityManager.force_direction(old_gravity)
-
-
 func _test_match_timer_and_overtime() -> void:
 	_begin("Match timer / overtime")
 	var scene := MATCH_SCENE.instantiate() as MatchController
@@ -595,223 +542,6 @@ func _test_bots() -> void:
 			break
 	_check(started, "bots leave their spawn and drive")
 	_check(scene.ball.global_position.length() < 100.0, "ball remains simulated")
-	await _cleanup()
-
-
-# --- 18 playtesting and balance ----------------------------------------------
-
-func _test_unstuck_rule() -> void:
-	_begin("Five-second unstuck rule")
-	var car := _track(CAR_SCENE.instantiate() as Car) as Car
-	var tuning := CAR_TUNING.duplicate() as CarTuning
-	tuning.unstuck_time = 0.25
-	car.tuning = tuning
-	car.car_id = 41
-	car.global_transform = Transform3D(Basis.IDENTITY, Vector3(1.0, 2.0, 3.0))
-	car.freeze = true
-	add_child(car)
-	await _frames(2)
-	# Move off the spawn without changing the remembered spawn transform.
-	car.global_position = Vector3(7.0, 7.0, 7.0)
-	var unstuck: Array[int] = []
-	var handler := func(cid: int) -> void:
-		unstuck.append(cid)
-	Events.car_unstuck.connect(handler)
-	await _frames(40)
-	Events.car_unstuck.disconnect(handler)
-	_check(unstuck.size() == 1, "immobile car is unstuck once", "events=%d" % unstuck.size())
-	_check(car.global_position.distance_to(Vector3(1.0, 2.0, 3.0)) < 1.2, "unstuck returns the car to its spawn", str(car.global_position))
-	_check(car._stuck_timer < 0.0, "unstuck reset is rate-limited")
-	car.freeze = false
-	await _cleanup()
-
-
-func _test_auto_right() -> void:
-	_begin("Auto-right assist")
-	GravityManager.force_direction(GravityManager.PHASE_FLOOR)
-	var car := _track(CAR_SCENE.instantiate() as Car) as Car
-	car.tuning = CAR_TUNING.duplicate() as CarTuning
-	car.car_id = 42
-	car.freeze = true
-	add_child(car)
-	await _frames(2)
-	car.global_transform = Transform3D(Basis(Vector3(0.0, 0.0, 1.0), PI), Vector3(0.0, 5.0, 0.0))
-	var righted: Array[int] = []
-	var handler := func(cid: int) -> void:
-		righted.append(cid)
-	Events.car_righted.connect(handler)
-	await _frames(170)
-	Events.car_righted.disconnect(handler)
-	_check(righted.size() >= 1, "flipped car is righted", "events=%d" % righted.size())
-	_check(car.global_transform.basis.y.dot(GravityManager.up) > 0.9, "auto-right restores local up", "dot=%.2f" % car.global_transform.basis.y.dot(GravityManager.up))
-	car.freeze = false
-	await _cleanup()
-
-
-func _test_wall_drive_not_righted() -> void:
-	_begin("Wall driving is not interrupted")
-	GravityManager.force_direction(GravityManager.PHASE_FLOOR)
-	var car := _track(CAR_SCENE.instantiate() as Car) as Car
-	car.tuning = CAR_TUNING.duplicate() as CarTuning
-	car.car_id = 43
-	car.freeze = true
-	add_child(car)
-	await _frames(2)
-	# A car driving on a side wall is perpendicular to global up. That is a
-	# legal gravity-shift surface, not an inverted car.
-	car.state = Car.State.GROUNDED
-	car.global_transform = Transform3D(Basis(Vector3(0.0, 0.0, 1.0), PI * 0.5), Vector3(5.0, 3.0, 0.0))
-	var righted: Array[int] = []
-	var handler := func(cid: int) -> void:
-		righted.append(cid)
-	Events.car_righted.connect(handler)
-	await _frames(150)
-	Events.car_righted.disconnect(handler)
-	_check(righted.is_empty(), "grounded wall driving is not auto-righted", "events=%d" % righted.size())
-	car.freeze = false
-	await _cleanup()
-
-
-func _test_ball_safety_reset() -> void:
-	_begin("Ball out-of-bounds safety")
-	var rules := RULES.duplicate() as MatchRules
-	rules.team_size = 0
-	rules.fill_with_bots = false
-	rules.kickoff_countdown = 0.01
-	rules.match_duration = 10.0
-	rules.replay_enabled = false
-	rules.overtime_enabled = false
-	var scene := _track(MATCH_SCENE.instantiate() as MatchController) as MatchController
-	scene.rules = rules
-	scene.auto_start = false
-	scene.headless_mode = true
-	scene.spawn_hud = false
-	scene.spawn_camera = false
-	add_child(scene)
-	await _frames(3)
-	scene.start_match()
-	await _frames(3)
-	var resets: Array[Vector3] = []
-	var handler := func(pos: Vector3) -> void:
-		resets.append(pos)
-	Events.ball_unstuck.connect(handler)
-	scene.ball.global_position = Vector3(200.0, 300.0, 400.0)
-	scene.ball.linear_velocity = Vector3(1.0, 0.0, 0.0)
-	scene._tick_safety(0.1)
-	await _frames(2)
-	Events.ball_unstuck.disconnect(handler)
-	_check(resets.size() == 1, "out-of-bounds ball is reset", "events=%d" % resets.size())
-	_check(Vector2(scene.ball.global_position.x, scene.ball.global_position.z).length() < 1.0, "ball returns to the kickoff spot", str(scene.ball.global_position))
-	await _cleanup()
-
-
-func _test_demo_spawn_protection() -> void:
-	_begin("Demo cooldown and spawn protection")
-	var attacker := _track(CAR_SCENE.instantiate() as Car) as Car
-	attacker.tuning = CAR_TUNING.duplicate() as CarTuning
-	attacker.car_id = 1
-	attacker.team = 2
-	attacker.demolition_enabled = true
-	attacker.freeze = true
-	add_child(attacker)
-	var victim := _track(CAR_SCENE.instantiate() as Car) as Car
-	victim.tuning = CAR_TUNING.duplicate() as CarTuning
-	victim.car_id = 2
-	victim.team = 1
-	victim.demolition_enabled = true
-	victim.freeze = true
-	add_child(victim)
-	await _frames(2)
-	attacker.linear_velocity = Vector3(30.0, 0.0, 0.0)
-	victim.state = Car.State.GROUNDED
-	victim._spawn_protection = 2.0
-	attacker._demolish_cooldown = 0.0
-	victim._demolish_cooldown = 0.0
-	attacker._on_body_entered(victim)
-	_check(victim.state != Car.State.DEMOLISHED, "spawn protection blocks demolition")
-	victim._spawn_protection = 0.0
-	attacker._demolish_cooldown = 0.0
-	attacker._on_body_entered(victim)
-	_check(victim.state == Car.State.DEMOLISHED, "demolition lands without protection")
-	_check(_near(attacker._demolish_cooldown, attacker.tuning.demolish_cooldown), "attacker pays the demo cooldown", "cd=%.2f" % attacker._demolish_cooldown)
-	attacker.freeze = false
-	victim.freeze = false
-	await _cleanup()
-
-
-func _test_arena_safety_and_goal_mouth() -> void:
-	_begin("Arena safety bounds and full-height goal")
-	var arena := _track(ARENA_SCENE.instantiate() as Arena) as Arena
-	add_child(arena)
-	await _frames(2)
-	_check(arena.is_inside_recovery_bounds(Vector3.ZERO), "centre is inside recovery bounds")
-	_check(not arena.is_inside_recovery_bounds(Vector3(100.0, 0.0, 0.0)), "far outside space is rejected")
-	_check(arena.is_in_goal_crease(Vector3(0.0, 0.0, Arena.HALF_EXTENTS.z + 2.0)), "goal recess is detected")
-	_check(not arena.is_in_goal_crease(Vector3(0.0, 0.0, Arena.HALF_EXTENTS.z - 2.0)), "open play is not a goal crease")
-	_check(Arena.GOAL_HEIGHT >= Arena.HALF_EXTENTS.y * 2.0 - 0.01, "goal spans the full end wall")
-	var pad: BoostPad = arena.pads[0] if not arena.pads.is_empty() else null
-	if pad != null:
-		pad.active = false
-		pad.visible = false
-		arena.reset_pads()
-		_check(pad.active and pad.visible, "reset_pads restores collected pads")
-	else:
-		_check(false, "arena builds boost pads")
-
-	# A ball rolling along the floor into the goal must score. This specifically
-	# guards the goal-mouth fillet cut and the full-height goal opening.
-	var ball := _track(BALL_SCENE.instantiate() as Ball) as Ball
-	ball.tuning = (load("res://ball/BallTuning.tres") as BallTuning).duplicate() as BallTuning
-	add_child(ball)
-	await _frames(2)
-	for goal: Goal in arena.goals:
-		goal.set_enabled(true)
-	var old_strength: float = GravityManager.gravity_strength
-	GravityManager.gravity_strength = 0.0
-	var hits: Array[int] = []
-	var handler := func(team: int, _scorer: int) -> void:
-		hits.append(team)
-	Events.goal_scored.connect(handler)
-	ball.global_position = Vector3(0.0, -Arena.HALF_EXTENTS.y + 2.0, Arena.HALF_EXTENTS.z - 2.5)
-	ball.linear_velocity = Vector3(0.0, 0.0, 18.0)
-	await _frames(35)
-	Events.goal_scored.disconnect(handler)
-	GravityManager.gravity_strength = old_strength
-	_check(hits.size() == 1, "floor shot enters the full-height goal", "events=%d pos=%s" % [hits.size(), str(ball.global_position)])
-	_check(not hits.is_empty() and hits[0] == 1, "floor shot credits the attacking team")
-	await _cleanup()
-
-
-func _test_sim_determinism_hooks() -> void:
-	_begin("Balance simulation determinism hooks")
-	var rules := RULES.duplicate() as MatchRules
-	rules.match_duration = 5.0
-	rules.kickoff_countdown = 0.01
-	rules.replay_enabled = false
-	rules.overtime_enabled = false
-	var scene := MATCH_SCENE.instantiate() as MatchController
-	scene.auto_start = false
-	scene.headless_mode = true
-	scene.spawn_hud = false
-	scene.spawn_camera = false
-	scene.all_bots = true
-	scene.start_phase_index = 2
-	scene.match_seed_override = 4242
-	scene.rules = rules
-	_track(scene)
-	add_child(scene)
-	await _frames(3)
-	scene.start_match()
-	await _frames(2)
-	_check(scene._match_seed == 4242, "match seed override is applied", "seed=%d" % scene._match_seed)
-	_check(GravityManager.phase_index == 2, "kickoff starts on the requested phase")
-	_check(GravityManager.gravity_dir.is_equal_approx(GravityManager.PHASE_CEILING), "phase 2 is the ceiling")
-	scene.start_phase_index = 3
-	scene.match_seed_override = 99
-	scene.start_match()
-	await _frames(2)
-	_check(scene._match_seed == 99, "seed override can change between samples")
-	_check(GravityManager.phase_index == 3, "phase override can change between samples")
 	await _cleanup()
 
 

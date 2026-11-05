@@ -1,6 +1,10 @@
-[gd_scene load_steps=2 format=3]
+[gd_scene load_steps=4 format=3]
 
 [ext_resource type="Script" path="res://arena/Arena.gd" id="1_arena"]
+[ext_resource type="Resource" path="res://arena/ArenaTheme.tres" id="2_theme"]
+[ext_resource type="Resource" path="res://match/MatchRules.tres" id="3_rules"]
 
 [node name="Arena" type="Node3D"]
 script = ExtResource("1_arena")
+theme = ExtResource("2_theme")
+rules = ExtResource("3_rules")

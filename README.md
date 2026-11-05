@@ -41,7 +41,7 @@ so every shift forces players to re-read the field and re-plan their aerials.
 2. Open this folder in the editor (`project.godot`).
 3. Let the first import finish, then press **F5** to run.
 
-The main scene is `res://main.tscn`.
+The main scene is the menu, `res://ui/Main.tscn`; matches load `res://match/Match.tscn`.
 
 ## Controls
 
